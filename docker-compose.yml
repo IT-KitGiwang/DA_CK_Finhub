@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # 1. Nút Master
+  master:
+    image: dack15-bigdata-base
+    container_name: master
+    hostname: master
+    command: sudo bash -c "ssh-keygen -A && /usr/sbin/sshd -D"
+    ports:
+      - "9870:9870" 
+      - "8089:8088" 
+      - "8080:8080" 
+    networks:
+      - hadoop-net
+    tty: true
+
+  # 2. Nút Slave 1
+  slave1:
+    image: dack15-bigdata-base
+    container_name: slave1
+    hostname: slave1
+    command: sudo bash -c "ssh-keygen -A && /usr/sbin/sshd -D"
+    networks:
+      - hadoop-net
+    tty: true
+
+  # 3. Nút Slave 2
+  slave2:
+    image: dack15-bigdata-base
+    container_name: slave2
+    hostname: slave2
+    command: sudo bash -c "ssh-keygen -A && /usr/sbin/sshd -D"
+    networks:
+      - hadoop-net
+    tty: true
+
+  # 4. Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - hadoop-net
+
+  # 5. Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092" 
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - hadoop-net
+
+networks:
+  hadoop-net:
+    driver: bridge
