@@ -25,3 +25,8 @@ temp/
 __pycache__/
 .spark-history/
 .spark-logs/
+
+# Environment secrets
+.env
+.env.*
+!.env.example

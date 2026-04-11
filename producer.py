@@ -4,12 +4,27 @@ import os
 from datetime import datetime
 from kafka import KafkaProducer
 
-# Mật khẩu API giả lập từ Finnhub
-API_KEY = "d6g5sv1r01qt4931ljbgd6g5sv1r01qt4931ljc0"
+def load_dotenv_file(path=".env"):
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+load_dotenv_file()
+
+API_KEY = os.getenv("FINNHUB_API_KEY", "")
+if not API_KEY:
+    raise ValueError("Missing FINNHUB_API_KEY in .env")
 
 # Cấu hình Kafka Kafka (Chạy trên cổng 9094 của localhost đẩy dữ liệu vào Cluster Docker)
-KAFKA_BROKER = 'localhost:9094'
-KAFKA_TOPIC = 'crypto_trades'
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9094")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "crypto_trades")
 
 # Khởi tạo Kafka Producer (Chuyển đổi dữ liệu Python Dict sang chuỗi JSON và mã hóa Bytes)
 print(f"Connecting to Kafka Broker: {KAFKA_BROKER}...")
@@ -19,11 +34,7 @@ producer = KafkaProducer(
 )
 
 # Danh sách symbol cần lấy
-SYMBOLS = [
-    "BINANCE:BTCUSDT",
-    "BINANCE:ETHUSDT",
-    "BINANCE:BNBUSDT"
-]
+SYMBOLS = [symbol.strip() for symbol in os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT").split(",") if symbol.strip()]
 
 def on_message(ws, message):
     data = json.loads(message)
