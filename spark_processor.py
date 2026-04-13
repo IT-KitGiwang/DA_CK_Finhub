@@ -9,7 +9,7 @@ spark = SparkSession.builder \
     .config("hive.metastore.uris", "thrift://master:9083") \
     .config("spark.sql.hive.metastore.version", "4.0.0") \
     .config("spark.sql.hive.metastore.jars", "path") \
-    .config("spark.sql.hive.metastore.jars.path", "/opt/hive/lib/*.jar") \
+    .config("spark.sql.hive.metastore.jars.path", "file:///opt/hive/lib/*") \
     .enableHiveSupport() \
     .getOrCreate()
 
@@ -24,6 +24,7 @@ df = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "kafka:9092") \
     .option("subscribe", "crypto_trades") \
+    .option("startingOffsets", "earliest") \
     .load()
 
 # Chuyển đổi 'time' từ String sang Timestamp để Superset vẽ được Chart thời gian
@@ -34,8 +35,7 @@ parsed_df = df.selectExpr("CAST(value AS STRING)") \
 
 query = parsed_df.writeStream \
     .outputMode("append") \
-    .format("hive") \
-    .option("checkpointLocation", "/tmp/spark_checkpoint_crypto_v2") \
+    .option("checkpointLocation", "/tmp/spark_checkpoint_crypto_final") \
     .toTable("crypto_trades")
 
 query.awaitTermination()

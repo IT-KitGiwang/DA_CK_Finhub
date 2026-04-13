@@ -124,12 +124,18 @@ EOF
     echo "Starting Spark Thrift Server on port 10000..."
     $SPARK_HOME/sbin/start-thriftserver.sh \
         --master local[2] \
+        --name "Spark-Thrift-Server" \
+        --conf spark.sql.hive.metastore.version=4.0.0 \
+        --conf spark.sql.hive.metastore.jars=path \
+        --conf spark.sql.hive.metastore.jars.path=file:///opt/hive/lib/* \
         --hiveconf hive.metastore.uris=thrift://master:9083 \
         --hiveconf hive.metastore.warehouse.dir=hdfs://master:9000/user/hive/warehouse \
         --hiveconf hive.server2.thrift.port=10000 \
         --hiveconf hive.server2.thrift.bind.host=0.0.0.0 \
+        --hiveconf hive.server2.transport.mode=binary \
         --hiveconf hive.server2.authentication=NOSASL \
-        --hiveconf hive.server2.enable.doAs=false
+        --hiveconf hive.server2.enable.doAs=false \
+        --hiveconf hive.metastore.schema.verification=false
 
     # Khoi chay Spark Master
     echo "Starting Spark Master..."
