@@ -33,3 +33,17 @@ Theo yêu cầu dự án, chúng ta sẽ thực hiện theo các bước sau:
 - **Bước 6**: Verify thông qua WEB UI (Hadoop 9870, YARN 8088, Spark 8080).
 
 *Lưu ý: Bạn vui lòng xem kỹ README này trước khi đồng ý cho tôi tiến hành sinh mã Code/Logic (Dockerfile, docker-compose.yml) ở các bước tiếp theo để đảm bảo đi đúng hướng kiến trúc.*
+
+# Cài đặt Superset
+
+# 1. Tạo tài khoản đăng nhập (User: admin | Pass: admin)
+docker exec -it superset superset fab create-admin --username admin --firstname Superset --lastname Admin --email admin@localhost --password admin
+
+# 2. Khởi tạo Database cho Superset ráp bảng (Dòng này sẽ fix triệt để lỗi 500)
+docker exec -it superset superset db upgrade
+
+# 3. Mở khóa, khởi tạo Roles
+docker exec -it superset superset init
+
+# 4. (Quan trọng) Cài Driver PyHive để tương lai nối được vào Hive
+docker exec -it -u root superset pip install pyhive thrift

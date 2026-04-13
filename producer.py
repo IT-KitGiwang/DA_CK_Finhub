@@ -1,6 +1,7 @@
 import websocket
 import json
 import os
+import time
 from datetime import datetime
 from kafka import KafkaProducer
 
@@ -36,12 +37,27 @@ producer = KafkaProducer(
 # Danh sách symbol cần lấy
 SYMBOLS = [symbol.strip() for symbol in os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT").split(",") if symbol.strip()]
 
+# Cấu hình chu kỳ cào dữ liệu (giây) - Đọc từ .env, mặc định là 1.0 giây
+SCRAPE_INTERVAL = float(os.getenv("SCRAPE_INTERVAL", "1.0"))
+
+# Biến lưu trữ thời gian gửi cuối cùng cho từng đồng coin
+last_sent_times = {}
+
 def on_message(ws, message):
     data = json.loads(message)
 
     if data.get("type") == "trade":
         for trade in data["data"]:
             symbol = trade.get("s")
+            
+            # Kiểm tra thời gian: Giới hạn SCRAPE_INTERVAL giây gửi 1 lần cho mỗi symbol
+            current_time = time.time()
+            if symbol in last_sent_times and current_time - last_sent_times[symbol] < SCRAPE_INTERVAL:
+                continue # Bỏ qua trade này nếu chưa qua SCRAPE_INTERVAL giây
+            
+            # Cập nhật thời gian gửi
+            last_sent_times[symbol] = current_time
+            
             price = trade.get("p")
             volume = trade.get("v")
             timestamp = trade.get("t")
@@ -63,12 +79,12 @@ def on_message(ws, message):
             print(f"[KAFKA SENT] - {time_str} | {symbol} | Price: {price} | Vol: {volume}")
 
 
-def on_error(ws, error):
-    print("ERROR:", error)
-
-def on_close(ws):
-    print("CLOSED")
+def on_close(ws, *args):
+    print("CLOSED", args)
     producer.close()
+
+def on_error(ws, error):
+    print(f"ERROR: {error}")
 
 def on_open(ws):
     print("Connected to WebSocket!")

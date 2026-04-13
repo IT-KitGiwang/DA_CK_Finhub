@@ -70,7 +70,21 @@ services:
     networks:
       - hadoop-net
 
+  superset:
+    image: apache/superset:latest
+    container_name: superset
+    hostname: superset
+    ports:
+      - "8089:8088" # Port 8088 bị YARN chiếm nên map ra ngoài cổng 8089
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+    volumes:
+      - superset-data:/app/superset_home
+    networks:
+      - hadoop-net
+
 volumes:
+  superset-data:
   master-hdfs-data:
   slave1-hdfs-data:
   slave2-hdfs-data:

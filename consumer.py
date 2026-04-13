@@ -30,4 +30,9 @@ consumer = KafkaConsumer(
 
 for message in consumer:
     data = message.value
-    print(f"📦 [XUẤT TỪ KAFKA] -> Thời gian: {data['time']}, Đồng coin: {data['symbol']}, Giá: {data['price']}")
+    
+    # Kiểm tra xem dữ liệu có đúng định dạng không
+    if isinstance(data, dict) and all(key in data for key in ['time', 'symbol', 'price', 'volume']):
+        print(f"📦 [XUẤT TỪ KAFKA] -> Thời gian: {data['time']}, Đồng coin: {data['symbol']}, Giá: {data['price']}, Khối lượng: {data['volume']}")
+    else:
+        print(f"⚠️ [DỮ LIỆU KHÁC/CŨ] -> {data}")

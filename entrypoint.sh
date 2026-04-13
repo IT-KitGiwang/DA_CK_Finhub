@@ -38,6 +38,18 @@ if [ "$MODE" = "master" ]; then
     $HADOOP_HOME/bin/hdfs dfs -mkdir -p /spark-logs
     $HADOOP_HOME/bin/hdfs dfs -chown -R dack15:dack15 /spark-logs
 
+    # Init Hive Metastore
+    if [ ! -d "/opt/hive/metastore_db" ]; then
+        echo "Initializing Hive Metastore Schema..."
+        $HIVE_HOME/bin/schematool -dbType derby -initSchema || true
+    fi
+
+    echo "Starting Hive Metastore..."
+    nohup $HIVE_HOME/bin/hive --service metastore > /opt/hive/logs/metastore.log 2>&1 &
+    
+    echo "Starting HiveServer2..."
+    nohup $HIVE_HOME/bin/hive --service hiveserver2 > /opt/hive/logs/hiveserver2.log 2>&1 &
+
     # Khoi chay Spark Master
     echo "Starting Spark Master..."
     $SPARK_HOME/sbin/start-master.sh

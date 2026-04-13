@@ -13,9 +13,11 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV HADOOP_VERSION=3.5.0
 ENV SPARK_VERSION=4.1.0
 ENV SCALA_VERSION=3.8
+ENV HIVE_VERSION=4.2.0
 ENV HADOOP_HOME=/opt/hadoop
 ENV SPARK_HOME=/opt/spark
-ENV PATH=$PATH:$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$SPARK_HOME/bin:$SPARK_HOME/sbin
+ENV HIVE_HOME=/opt/hive
+ENV PATH=$PATH:$JAVA_HOME/bin:$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$SPARK_HOME/bin:$SPARK_HOME/sbin:$HIVE_HOME/bin
 
 # Tạo user dack15
 RUN useradd -m -s /bin/bash dack15 && \
@@ -38,8 +40,20 @@ RUN wget -q "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-
     rm -rf ${SPARK_HOME}/examples ${SPARK_HOME}/data && \
     mkdir -p /opt/spark/logs
 
+# Tải và giải nén Apache Hive
+RUN wget -q "https://downloads.apache.org/hive/hive-${HIVE_VERSION}/apache-hive-${HIVE_VERSION}-bin.tar.gz" && \
+    tar -xzf apache-hive-${HIVE_VERSION}-bin.tar.gz -C /opt/ && \
+    mv /opt/apache-hive-${HIVE_VERSION}-bin ${HIVE_HOME} && \
+    rm apache-hive-${HIVE_VERSION}-bin.tar.gz
+
+# Loại bỏ SLF4J bị trùng lặp giữa Hadoop và Hive để tránh lỗi khởi động Hive
+RUN rm -f ${HIVE_HOME}/lib/log4j-slf4j-impl-*.jar || true
+
+# Tạo thư mục logs cho Hive
+RUN mkdir -p ${HIVE_HOME}/logs
+
 # Phân quyền cho dack15
-RUN chown -R dack15:dack15 /opt/hadoop /opt/spark
+RUN chown -R dack15:dack15 /opt/hadoop /opt/spark /opt/hive
 
 USER dack15
 WORKDIR /home/dack15
@@ -54,9 +68,14 @@ RUN ssh-keygen -t rsa -P '' -f ~/.ssh/id_rsa && \
 COPY --chown=dack15:dack15 config/ /opt/hadoop/etc/hadoop/
 COPY --chown=dack15:dack15 config/spark/ /opt/spark/conf/
 
-# Loại bỏ ký tự Windows CRLF (\r) trong file workers để Linux Hadoop đọc không bị lỗi (hostname contains invalid characters)
-RUN sed -i 's/\r$//' /opt/hadoop/etc/hadoop/workers && \
-    sed -i 's/\r$//' /opt/spark/conf/workers
+# Copy Hive configuration (hive-site.xml)
+COPY --chown=dack15:dack15 config/hive-site.xml /opt/hive/conf/
+COPY --chown=dack15:dack15 config/hive-site.xml /opt/spark/conf/
+
+# Loại bỏ ký tự Windows CRLF (\r) trong các file cấu hình để Linux Hadoop/Spark đọc không bị lỗi
+RUN find /opt/hadoop/etc/hadoop/ -type f -exec sed -i 's/\r$//' {} + && \
+    find /opt/spark/conf/ -type f -exec sed -i 's/\r$//' {} + && \
+    find /opt/hive/conf/ -type f -exec sed -i 's/\r$//' {} +
 
 # Chép entrypoint script
 COPY --chown=dack15:dack15 entrypoint.sh /home/dack15/entrypoint.sh
