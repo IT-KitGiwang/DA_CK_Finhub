@@ -32,39 +32,102 @@ if [ "$MODE" = "master" ]; then
     # Khoi chay Job History Server
     $HADOOP_HOME/sbin/mr-jobhistory-daemon.sh start historyserver
 
-    # Đảm bảo HDFS đã lên để Spark và Hive có thể tạo directory
-    echo "Wait 10s for HDFS to initialize before creating folders..."
-    sleep 10
+    # Đảm bảo HDFS đã lên (chờ tối đa 30s)
+    echo "Waiting for HDFS to leave safe mode..."
+    $HADOOP_HOME/bin/hdfs dfsadmin -safemode wait || sleep 10
+
+    # Tạo các thư mục cần thiết trên HDFS
+    echo "Creating HDFS directories..."
     $HADOOP_HOME/bin/hdfs dfs -mkdir -p /spark-logs
-    $HADOOP_HOME/bin/hdfs dfs -chown -R dack15:dack15 /spark-logs
-    
-    # [QUAN TRỌNG TỐI CAO] Tạo thư mục Hive Warehouse trên HDFS. Nếu thiếu, HiveServer2 sẽ bị TREO VÔ TẬN khi gọi Session.
-    echo "Creating Hive Warehouse on HDFS..."
     $HADOOP_HOME/bin/hdfs dfs -mkdir -p /user/hive/warehouse
-    $HADOOP_HOME/bin/hdfs dfs -chmod -R 777 /user/hive
     $HADOOP_HOME/bin/hdfs dfs -mkdir -p /tmp/hive
+    $HADOOP_HOME/bin/hdfs dfs -chmod -R 777 /user/hive
     $HADOOP_HOME/bin/hdfs dfs -chmod -R 777 /tmp/hive
+    $HADOOP_HOME/bin/hdfs dfs -chmod -R 777 /spark-logs
+
+    # Cấu hình RAM cho Hive (Hive 4.x dùng HADOOP_HEAPSIZE)
+    cat > /opt/hive/conf/hive-env.sh << 'EOF'
+export HADOOP_HEAPSIZE=1024
+export HADOOP_CLIENT_OPTS="-Xmx1024m -XX:+UseG1GC"
+EOF
+
+    # ==============================================================
+    # BƯỚC 1: Khởi động METASTORE với conf RIÊNG (không có hive.metastore.uris)
+    # LÝ DO: Nếu Metastore đọc hive.metastore.uris=thrift://master:9083,
+    # nó sẽ cố kết nối đến chính mình qua Thrift → deadlock → không bao giờ
+    # mở cổng 9083 → HiveServer2 chờ mãi → cổng 10000 không bao giờ mở.
+    # ==============================================================
+    echo "Setting up Metastore config (isolated, NO thrift URI)..."
+    mkdir -p /tmp/metastore_conf
+    cat > /tmp/metastore_conf/hive-site.xml << 'EOF'
+<?xml version="1.0"?>
+<configuration>
+    <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:derby:;databaseName=/opt/hive/metastore_db;create=true</value>
+    </property>
+    <property>
+        <name>javax.jdo.option.ConnectionDriverName</name>
+        <value>org.apache.derby.jdbc.EmbeddedDriver</value>
+    </property>
+    <property>
+        <name>hive.metastore.warehouse.dir</name>
+        <value>hdfs://master:9000/user/hive/warehouse</value>
+    </property>
+    <property>
+        <name>hive.metastore.schema.verification</name>
+        <value>false</value>
+    </property>
+    <property>
+        <name>hive.server2.enable.doAs</name>
+        <value>false</value>
+    </property>
+</configuration>
+EOF
 
     # Xóa lock file của Derby nếu tồn tại (tránh lỗi database is read-only)
-    rm -f /opt/hive/metastore_db/*.lck || true
-    sudo chown -R dack15:dack15 /opt/hive/metastore_db || true
-    
-    # Cấu hình RAM cho Hive: Hive 4.x bỏ qua HIVE_OPTS=-Xmx. Bắt buộc dùng HADOOP_HEAPSIZE trong hive-env.sh
-    echo "export HADOOP_HEAPSIZE=1024" > /opt/hive/conf/hive-env.sh
-    echo "export HADOOP_CLIENT_OPTS=\"-Xmx1024m\"" >> /opt/hive/conf/hive-env.sh
+    rm -f /opt/hive/metastore_db/*.lck 2>/dev/null || true
+    sudo chown -R dack15:dack15 /opt/hive/metastore_db 2>/dev/null || true
 
-
-    # Init Hive Metastore
+    # Init Hive Metastore Schema nếu chưa có
     if [ ! -d "/opt/hive/metastore_db" ]; then
         echo "Initializing Hive Metastore Schema..."
-        $HIVE_HOME/bin/schematool -dbType derby -initSchema || true
+        HIVE_CONF_DIR=/tmp/metastore_conf $HIVE_HOME/bin/schematool -dbType derby -initSchema 2>&1
     fi
 
-    echo "Starting Hive Metastore..."
-    nohup $HIVE_HOME/bin/hive --service metastore > /opt/hive/logs/metastore.log 2>&1 &
+    # Khởi động Metastore với conf RIÊNG
+    echo "Starting Hive Metastore (isolated conf)..."
+    HIVE_CONF_DIR=/tmp/metastore_conf nohup $HIVE_HOME/bin/hive --service metastore \
+        > /opt/hive/logs/metastore.log 2>&1 &
     
+    # ==============================================================
+    # BƯỚC 2: Chờ Metastore mở cổng 9083 trước khi khởi động HiveServer2
+    # ==============================================================
+    echo "Waiting for Hive Metastore on port 9083 (max 120s)..."
+    METASTORE_UP=false
+    for i in $(seq 1 60); do
+        if nc -z localhost 9083 2>/dev/null; then
+            echo ">>> Metastore is UP on port 9083! (after ${i}*2s)"
+            METASTORE_UP=true
+            break
+        fi
+        sleep 2
+    done
+
+    if [ "$METASTORE_UP" = "false" ]; then
+        echo "ERROR: Metastore did not start in 120s. Check /opt/hive/logs/metastore.log"
+        cat /opt/hive/logs/metastore.log
+        # Tiếp tục khởi động dù không thành công để container không chết
+    fi
+
+    # ==============================================================
+    # BƯỚC 3: Khởi động HiveServer2 với full conf (có hive.metastore.uris)
+    # LÝ DO: HS2 cần hive.metastore.uris để biết kết nối đến Metastore Thrift,
+    # nhưng KHÔNG được có javax.jdo conn string (để tránh HikariCP deadlock).
+    # ==============================================================
     echo "Starting HiveServer2..."
-    nohup $HIVE_HOME/bin/hive --service hiveserver2 > /opt/hive/logs/hiveserver2.log 2>&1 &
+    nohup $HIVE_HOME/bin/hive --service hiveserver2 \
+        > /opt/hive/logs/hiveserver2.log 2>&1 &
 
     # Khoi chay Spark Master
     echo "Starting Spark Master..."

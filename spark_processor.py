@@ -5,10 +5,11 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 # Cấu hình Spark Session tương thích Hive 4
 spark = SparkSession.builder \
     .appName("CryptoKafkaToHive") \
-    .config("spark.sql.warehouse.dir", "/user/hive/warehouse") \
+    .config("spark.sql.warehouse.dir", "hdfs://master:9000/user/hive/warehouse") \
     .config("hive.metastore.uris", "thrift://master:9083") \
-    .config("spark.sql.hive.metastore.version", "3.1.2") \
-    .config("spark.sql.hive.metastore.jars", "builtin") \
+    .config("spark.sql.hive.metastore.version", "4.0.0") \
+    .config("spark.sql.hive.metastore.jars", "path") \
+    .config("spark.sql.hive.metastore.jars.path", "/opt/hive/lib/*.jar") \
     .enableHiveSupport() \
     .getOrCreate()
 
