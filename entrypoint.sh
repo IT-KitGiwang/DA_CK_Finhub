@@ -32,18 +32,27 @@ if [ "$MODE" = "master" ]; then
     # Khoi chay Job History Server
     $HADOOP_HOME/sbin/mr-jobhistory-daemon.sh start historyserver
 
-    # Đảm bảo HDFS đã lên để Spark có thể tạo thư mục log trên HDFS
-    echo "Wait 10s for HDFS to initialize before creating Spark History folder..."
+    # Đảm bảo HDFS đã lên để Spark và Hive có thể tạo directory
+    echo "Wait 10s for HDFS to initialize before creating folders..."
     sleep 10
     $HADOOP_HOME/bin/hdfs dfs -mkdir -p /spark-logs
     $HADOOP_HOME/bin/hdfs dfs -chown -R dack15:dack15 /spark-logs
+    
+    # [QUAN TRỌNG TỐI CAO] Tạo thư mục Hive Warehouse trên HDFS. Nếu thiếu, HiveServer2 sẽ bị TREO VÔ TẬN khi gọi Session.
+    echo "Creating Hive Warehouse on HDFS..."
+    $HADOOP_HOME/bin/hdfs dfs -mkdir -p /user/hive/warehouse
+    $HADOOP_HOME/bin/hdfs dfs -chmod -R 777 /user/hive
+    $HADOOP_HOME/bin/hdfs dfs -mkdir -p /tmp/hive
+    $HADOOP_HOME/bin/hdfs dfs -chmod -R 777 /tmp/hive
 
     # Xóa lock file của Derby nếu tồn tại (tránh lỗi database is read-only)
     rm -f /opt/hive/metastore_db/*.lck || true
     sudo chown -R dack15:dack15 /opt/hive/metastore_db || true
+    
+    # Cấu hình RAM cho Hive: Hive 4.x bỏ qua HIVE_OPTS=-Xmx. Bắt buộc dùng HADOOP_HEAPSIZE trong hive-env.sh
+    echo "export HADOOP_HEAPSIZE=1024" > /opt/hive/conf/hive-env.sh
+    echo "export HADOOP_CLIENT_OPTS=\"-Xmx1024m\"" >> /opt/hive/conf/hive-env.sh
 
-    # Cấu hình RAM cho Hive
-    export HIVE_OPTS="-Xmx1024m"
 
     # Init Hive Metastore
     if [ ! -d "/opt/hive/metastore_db" ]; then
