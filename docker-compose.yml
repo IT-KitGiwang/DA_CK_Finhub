@@ -1,6 +1,6 @@
 services:
   master:
-    build: .
+    # build: .  # Tạm tắt build vì archive.apache.org đang sập - dùng image có sẵn
     image: hadoop-spark-jdk21:latest
     container_name: master
     hostname: master
@@ -12,6 +12,8 @@ services:
       - "8080:8080" # Spark Master Web UI
       - "19888:19888" # MapReduce JobHistory Web UI
       - "4040:4040" # Spark Application UI
+      - "10000:10000"   # ← thêm: HiveServer2
+      - "9083:9083"     # ← thêm: Hive Metastore
     volumes:
       - master-hdfs-data:/opt/hadoop/data
       - ./config:/config-template # Giao diện chia sẻ cấu hình
@@ -70,24 +72,29 @@ services:
     networks:
       - hadoop-net
 
+  
   superset:
-    image: apache/superset:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.superset   # ← đổi: dùng image custom
     container_name: superset
     hostname: superset
     ports:
-      - "8089:8088" # Port 8088 bị YARN chiếm nên map ra ngoài cổng 8089
+      - "8089:8088"
     environment:
       - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
     volumes:
       - superset-data:/app/superset_home
     networks:
       - hadoop-net
+    depends_on:
+      - master   # ← thêm: chờ master khởi động
 
 volumes:
-  superset-data:
   master-hdfs-data:
   slave1-hdfs-data:
   slave2-hdfs-data:
+  superset-data:
 
 networks:
   hadoop-net:

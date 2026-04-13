@@ -38,6 +38,13 @@ if [ "$MODE" = "master" ]; then
     $HADOOP_HOME/bin/hdfs dfs -mkdir -p /spark-logs
     $HADOOP_HOME/bin/hdfs dfs -chown -R dack15:dack15 /spark-logs
 
+    # Xóa lock file của Derby nếu tồn tại (tránh lỗi database is read-only)
+    rm -f /opt/hive/metastore_db/*.lck || true
+    sudo chown -R dack15:dack15 /opt/hive/metastore_db || true
+
+    # Cấu hình RAM cho Hive
+    export HIVE_OPTS="-Xmx1024m"
+
     # Init Hive Metastore
     if [ ! -d "/opt/hive/metastore_db" ]; then
         echo "Initializing Hive Metastore Schema..."

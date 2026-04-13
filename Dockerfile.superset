@@ -1,0 +1,31 @@
+FROM apache/superset:latest
+
+USER root
+
+RUN apt-get update && apt-get install -y \
+    gcc g++ \
+    libsasl2-dev \
+    libsasl2-modules \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cài vào system site-packages (root), sau đó copy sang venv của superset
+RUN pip install --no-cache-dir \
+    pyhive[hive] \
+    thrift \
+    thrift-sasl \
+    sasl \
+    impyla && \
+    VENV_SITE=/app/.venv/lib/$(ls /app/.venv/lib)/site-packages && \
+    SYS_SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    cp -rn $SYS_SITE/pyhive $VENV_SITE/ 2>/dev/null || true && \
+    cp -rn $SYS_SITE/thrift $VENV_SITE/ 2>/dev/null || true && \
+    cp -rn $SYS_SITE/thrift_sasl* $VENV_SITE/ 2>/dev/null || true && \
+    cp -rn $SYS_SITE/sasl* $VENV_SITE/ 2>/dev/null || true && \
+    cp -rn $SYS_SITE/impyla* $VENV_SITE/ 2>/dev/null || true && \
+    cp -rn $SYS_SITE/TCLIService* $VENV_SITE/ 2>/dev/null || true && \
+    cp -rn $SYS_SITE/pure_sasl* $VENV_SITE/ 2>/dev/null || true && \
+    cp -rn $SYS_SITE/future* $VENV_SITE/ 2>/dev/null || true && \
+    cp -rn $SYS_SITE/bitarray* $VENV_SITE/ 2>/dev/null || true
+
+USER superset

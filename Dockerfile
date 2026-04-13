@@ -46,6 +46,9 @@ RUN wget -q "https://downloads.apache.org/hive/hive-${HIVE_VERSION}/apache-hive-
     mv /opt/apache-hive-${HIVE_VERSION}-bin ${HIVE_HOME} && \
     rm apache-hive-${HIVE_VERSION}-bin.tar.gz
 
+# Tải bổ sung derbytools (Hive 4.x thiếu file này để chạy Derby embedded)
+RUN wget -q "https://repo1.maven.org/maven2/org/apache/derby/derbytools/10.17.1.0/derbytools-10.17.1.0.jar" -P ${HIVE_HOME}/lib/
+
 # Loại bỏ SLF4J bị trùng lặp giữa Hadoop và Hive để tránh lỗi khởi động Hive
 RUN rm -f ${HIVE_HOME}/lib/log4j-slf4j-impl-*.jar || true
 

@@ -21,4 +21,14 @@
         <value>false</value>
         <description>Disable user impersonation for simpler setup</description>
     </property>
+    <property>
+        <name>hive.metastore.uris</name>
+        <value>thrift://master:9083</value>
+        <description>HiveServer2 connects to Metastore via Thrift, avoiding Derby lock conflicts</description>
+    </property>
+    <property>
+        <name>hive.server2.authentication</name>
+        <value>NOSASL</value>
+        <description>No SASL authentication for simpler Superset connectivity</description>
+    </property>
 </configuration>
