@@ -45,17 +45,12 @@ if [ "$MODE" = "master" ]; then
     $HADOOP_HOME/bin/hdfs dfs -chmod -R 777 /tmp/hive
     $HADOOP_HOME/bin/hdfs dfs -chmod -R 777 /spark-logs
 
-    # Cấu hình RAM cho Hive (Hive 4.x dùng HADOOP_HEAPSIZE)
-    cat > /opt/hive/conf/hive-env.sh << 'EOF'
-export HADOOP_HEAPSIZE=1024
-export HADOOP_CLIENT_OPTS="-Xmx1024m -XX:+UseG1GC"
-EOF
+    # [FIX #5] Cấp RAM 1024MB TRỰC TIẾP trong shell — Hive 4.x KHÔNG đọc hive-env.sh
+    export HADOOP_HEAPSIZE=1024
+    export HADOOP_CLIENT_OPTS="-Xmx1024m -XX:+UseG1GC"
 
     # ==============================================================
     # BƯỚC 1: Khởi động METASTORE với conf RIÊNG (không có hive.metastore.uris)
-    # LÝ DO: Nếu Metastore đọc hive.metastore.uris=thrift://master:9083,
-    # nó sẽ cố kết nối đến chính mình qua Thrift → deadlock → không bao giờ
-    # mở cổng 9083 → HiveServer2 chờ mãi → cổng 10000 không bao giờ mở.
     # ==============================================================
     echo "Setting up Metastore config (isolated, NO thrift URI)..."
     mkdir -p /tmp/metastore_conf
@@ -85,13 +80,14 @@ EOF
 </configuration>
 EOF
 
-    # Xóa lock file của Derby nếu tồn tại (tránh lỗi database is read-only)
+    # Xóa lock file của Derby
     rm -f /opt/hive/metastore_db/*.lck 2>/dev/null || true
     sudo chown -R dack15:dack15 /opt/hive/metastore_db 2>/dev/null || true
 
-    # Init Hive Metastore Schema nếu chưa có
-    if [ ! -d "/opt/hive/metastore_db" ]; then
-        echo "Initializing Hive Metastore Schema..."
+    # [FIX #3] Init schema: kiểm tra bằng schematool -info thay vì chỉ check folder
+    if ! HIVE_CONF_DIR=/tmp/metastore_conf $HIVE_HOME/bin/schematool -dbType derby -info > /dev/null 2>&1; then
+        echo "Metastore schema missing or corrupt. Re-initializing..."
+        rm -rf /opt/hive/metastore_db
         HIVE_CONF_DIR=/tmp/metastore_conf $HIVE_HOME/bin/schematool -dbType derby -initSchema 2>&1
     fi
 
@@ -101,7 +97,7 @@ EOF
         > /opt/hive/logs/metastore.log 2>&1 &
     
     # ==============================================================
-    # BƯỚC 2: Chờ Metastore mở cổng 9083 trước khi khởi động HiveServer2
+    # BƯỚC 2: Chờ Metastore mở cổng 9083
     # ==============================================================
     echo "Waiting for Hive Metastore on port 9083 (max 120s)..."
     METASTORE_UP=false
@@ -115,19 +111,25 @@ EOF
     done
 
     if [ "$METASTORE_UP" = "false" ]; then
-        echo "ERROR: Metastore did not start in 120s. Check /opt/hive/logs/metastore.log"
+        echo "ERROR: Metastore did not start. Log:"
         cat /opt/hive/logs/metastore.log
-        # Tiếp tục khởi động dù không thành công để container không chết
     fi
 
     # ==============================================================
-    # BƯỚC 3: Khởi động HiveServer2 với full conf (có hive.metastore.uris)
-    # LÝ DO: HS2 cần hive.metastore.uris để biết kết nối đến Metastore Thrift,
-    # nhưng KHÔNG được có javax.jdo conn string (để tránh HikariCP deadlock).
+    # [FIX FINAL] Dùng Spark Thrift Server thay cho HiveServer2
+    # Spark Thrift Server cung cấp CÙNG giao thức Thrift trên port 10000
+    # nhưng ổn định hơn trên Hive 4.x (không bị jline shutdown loop)
+    # Superset kết nối y hệt: hive://dack15@master:10000/default?auth=NOSASL
     # ==============================================================
-    echo "Starting HiveServer2..."
-    nohup $HIVE_HOME/bin/hive --service hiveserver2 \
-        > /opt/hive/logs/hiveserver2.log 2>&1 &
+    echo "Starting Spark Thrift Server on port 10000..."
+    $SPARK_HOME/sbin/start-thriftserver.sh \
+        --master local[2] \
+        --hiveconf hive.metastore.uris=thrift://master:9083 \
+        --hiveconf hive.metastore.warehouse.dir=hdfs://master:9000/user/hive/warehouse \
+        --hiveconf hive.server2.thrift.port=10000 \
+        --hiveconf hive.server2.thrift.bind.host=0.0.0.0 \
+        --hiveconf hive.server2.authentication=NOSASL \
+        --hiveconf hive.server2.enable.doAs=false
 
     # Khoi chay Spark Master
     echo "Starting Spark Master..."
