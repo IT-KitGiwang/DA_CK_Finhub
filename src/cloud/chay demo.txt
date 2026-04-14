@@ -1,0 +1,6 @@
+pip install google-cloud-pubsub google-cloud-bigquery google-cloud-aiplatform
+1. kafka -> pub sub
+docker-compose up -d kafka
+-> 2 terminal
+python src/kafka/producer.py
+python src/cloud/kafka_to_pubsub.py
