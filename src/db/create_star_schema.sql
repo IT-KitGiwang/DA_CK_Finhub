@@ -1,48 +1,51 @@
 -- =============================================================================
--- FINHUB CRYPTO PIPELINE — STAR SCHEMA DDL
--- Mô hình: 1 Fact Table + 4 Dimension Tables
--- Database: Apache Hive (Spark Thrift Server, port 10000)
--- Tác giả: DA_CK_Finhub Team
+-- FINHUB CRYPTO PIPELINE — REAL-TIME STAR SCHEMA (HỆ VIEW)
+-- =============================================================================
+-- Kiến trúc: Logical Data Warehouse trên Lakehouse
+--   • Dim tĩnh (Physical): dim_symbol, dim_exchange  → Lưu thật trên HDFS
+--   • Dim động (View):     vw_dim_date, vw_dim_time  → Tự sinh từ dữ liệu
+--   • Fact (View):         vw_fact_crypto_trades     → Real-time, không tốn ổ cứng
+--
+-- Bảng nguồn: crypto_trades (do Spark Streaming ghi liên tục)
+-- Database:   default (Spark Thrift Server, port 10000)
 -- =============================================================================
 
--- -----------------------------------------------------------------------------
--- BƯỚC 0: Đảm bảo đang dùng đúng database
--- -----------------------------------------------------------------------------
-CREATE DATABASE IF NOT EXISTS finhub;
-USE finhub;
 
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║  PHẦN 1: DIMENSION VẬT LÝ (PHYSICAL TABLES)                            ║
+-- ║  Dữ liệu tĩnh, seed thủ công, lưu trên HDFS dạng Parquet              ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
 
--- =============================================================================
--- DIMENSION TABLES
--- Tạo các bảng dimension trước (không có FK dependency)
--- =============================================================================
 
 -- -----------------------------------------------------------------------------
 -- DIM_EXCHANGE — Thông tin sàn giao dịch
--- Dữ liệu tĩnh, seed thủ công (hiện tại chỉ có BINANCE)
+-- Dữ liệu Master Data: hiện tại chỉ có Binance
+-- Khi mở rộng thêm sàn mới (Coinbase, OKX...) → INSERT thêm dòng
 -- -----------------------------------------------------------------------------
 DROP TABLE IF EXISTS dim_exchange;
+
 CREATE TABLE dim_exchange (
     exchange_key        INT         COMMENT 'Surrogate key (PK)',
     exchange_name       STRING      COMMENT 'Tên viết tắt: BINANCE',
     exchange_fullname   STRING      COMMENT 'Tên đầy đủ: Binance Exchange',
-    country             STRING      COMMENT 'Quốc gia đăng ký: Malta',
-    exchange_type       STRING      COMMENT 'Loại sàn: CEX / DEX',
-    quote_currency      STRING      COMMENT 'Đồng tiền định danh: USDT'
+    country             STRING      COMMENT 'Quốc gia đăng ký',
+    exchange_type       STRING      COMMENT 'Loại sàn: CEX (Tập trung) / DEX (Phi tập trung)',
+    quote_currency      STRING      COMMENT 'Đồng tiền định giá mặc định: USDT'
 )
-COMMENT 'Dimension: Thông tin sàn giao dịch'
+COMMENT 'Dimension vật lý: Thông tin sàn giao dịch tiền mã hóa'
 STORED AS PARQUET;
 
--- Seed data cho DIM_EXCHANGE
 INSERT INTO dim_exchange VALUES
-    (1, 'BINANCE', 'Binance Exchange', 'Malta',   'CEX', 'USDT');
+    (1, 'BINANCE', 'Binance Exchange', 'Malta', 'CEX', 'USDT');
 
 
 -- -----------------------------------------------------------------------------
 -- DIM_SYMBOL — Thông tin đồng tiền crypto
--- Dữ liệu tĩnh, seed thủ công theo danh sách symbol trong .env
+-- Dữ liệu Master Data: 3 đồng đang theo dõi (BTC, ETH, BNB)
+-- Khi thêm đồng mới vào .env → INSERT thêm dòng tương ứng
 -- -----------------------------------------------------------------------------
 DROP TABLE IF EXISTS dim_symbol;
+
 CREATE TABLE dim_symbol (
     symbol_key          INT         COMMENT 'Surrogate key (PK)',
     symbol              STRING      COMMENT 'Symbol đầy đủ: BINANCE:BTCUSDT',
@@ -51,46 +54,35 @@ CREATE TABLE dim_symbol (
     quote_currency      STRING      COMMENT 'Đồng định giá: USDT',
     asset_name          STRING      COMMENT 'Tên đầy đủ: Bitcoin',
     asset_type          STRING      COMMENT 'Loại tài sản: Cryptocurrency',
-    market_cap_tier     STRING      COMMENT 'Phân nhóm vốn hóa: Large-cap / Mid-cap'
+    market_cap_tier     STRING      COMMENT 'Phân nhóm vốn hóa thị trường'
 )
-COMMENT 'Dimension: Thông tin đồng tiền crypto'
+COMMENT 'Dimension vật lý: Thông tin đồng tiền mã hóa'
 STORED AS PARQUET;
 
--- Seed data cho DIM_SYMBOL
 INSERT INTO dim_symbol VALUES
     (1, 'BINANCE:BTCUSDT', 'BTCUSDT', 'BTC', 'USDT', 'Bitcoin',  'Cryptocurrency', 'Large-cap'),
     (2, 'BINANCE:ETHUSDT', 'ETHUSDT', 'ETH', 'USDT', 'Ethereum', 'Cryptocurrency', 'Large-cap'),
     (3, 'BINANCE:BNBUSDT', 'BNBUSDT', 'BNB', 'USDT', 'BNB',      'Cryptocurrency', 'Mid-cap');
 
 
--- -----------------------------------------------------------------------------
--- DIM_DATE — Chiều thời gian theo ngày
--- Dữ liệu được generate bằng Spark hoặc insert thủ công cho range cần thiết
--- date_key format: YYYYMMDD (ví dụ: 20260414)
--- -----------------------------------------------------------------------------
-DROP TABLE IF EXISTS dim_date;
-CREATE TABLE dim_date (
-    date_key            INT         COMMENT 'Surrogate key (PK): YYYYMMDD',
-    full_date           STRING      COMMENT 'Ngày đầy đủ: 2026-04-14',
-    year                INT         COMMENT 'Năm: 2026',
-    quarter             INT         COMMENT 'Quý: 1/2/3/4',
-    month               INT         COMMENT 'Tháng: 1-12',
-    month_name          STRING      COMMENT 'Tên tháng: January...December',
-    week_of_year        INT         COMMENT 'Tuần trong năm: 1-52',
-    day_of_month        INT         COMMENT 'Ngày trong tháng: 1-31',
-    day_of_week         INT         COMMENT 'Ngày trong tuần: 1=Mon...7=Sun',
-    day_name            STRING      COMMENT 'Tên ngày: Monday...Sunday',
-    is_weekend          BOOLEAN     COMMENT 'Là cuối tuần: true/false'
-)
-COMMENT 'Dimension: Chiều thời gian theo ngày'
-STORED AS PARQUET;
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║  PHẦN 2: DIMENSION ĐỘNG (LOGICAL VIEWS)                                 ║
+-- ║  Tự sinh từ dữ liệu trong bảng crypto_trades                           ║
+-- ║  Không chiếm ổ cứng, luôn cập nhật real-time                           ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
 
--- Generate DIM_DATE từ bảng raw crypto_trades bằng Spark SQL
--- Chạy lệnh này sau khi đã có dữ liệu trong bảng nguồn
-INSERT INTO dim_date
+
+-- -----------------------------------------------------------------------------
+-- VW_DIM_DATE — Chiều thời gian theo NGÀY (View ảo)
+-- Tự động sinh ra ngày mới khi Spark ghi dữ liệu ngày mới vào crypto_trades
+-- Không cần chạy batch INSERT định kỳ
+-- -----------------------------------------------------------------------------
+DROP VIEW IF EXISTS vw_dim_date;
+
+CREATE VIEW vw_dim_date AS
 SELECT DISTINCT
-    CAST(DATE_FORMAT(time, 'yyyyMMdd') AS INT)      AS date_key,
-    DATE_FORMAT(time, 'yyyy-MM-dd')                  AS full_date,
+    CAST(DATE_FORMAT(time, 'yyyyMMdd') AS INT)       AS date_key,
+    CAST(time AS DATE)                                AS full_date,
     YEAR(time)                                        AS year,
     QUARTER(time)                                     AS quarter,
     MONTH(time)                                       AS month,
@@ -99,224 +91,236 @@ SELECT DISTINCT
     DAY(time)                                         AS day_of_month,
     DAYOFWEEK(time)                                   AS day_of_week,
     DATE_FORMAT(time, 'EEEE')                         AS day_name,
-    CASE WHEN DAYOFWEEK(time) IN (1, 7) THEN TRUE
-         ELSE FALSE END                               AS is_weekend
-FROM crypto_trades
-ORDER BY date_key;
+    CASE
+        WHEN DAYOFWEEK(time) IN (1, 7) THEN TRUE
+        ELSE FALSE
+    END                                               AS is_weekend
+FROM crypto_trades;
 
 
 -- -----------------------------------------------------------------------------
--- DIM_TIME — Chiều thời gian theo giờ:phút:giây
--- time_key format: HHMMSS (ví dụ: 164518)
--- trading_session dựa trên giờ UTC+7 (Việt Nam)
+-- VW_DIM_TIME — Chiều thời gian theo GIỜ:PHÚT:GIÂY (View ảo)
+-- Bao gồm phân loại buổi (Morning/Afternoon/Evening/Night)
+-- và phiên giao dịch quốc tế (Asia/Europe/US) theo múi giờ UTC+7
 -- -----------------------------------------------------------------------------
-DROP TABLE IF EXISTS dim_time;
-CREATE TABLE dim_time (
-    time_key            INT         COMMENT 'Surrogate key (PK): HHMMSS',
-    hour                INT         COMMENT 'Giờ: 0-23',
-    minute              INT         COMMENT 'Phút: 0-59',
-    second              INT         COMMENT 'Giây: 0-59',
-    period              STRING      COMMENT 'Buổi: Morning/Afternoon/Evening/Night',
-    trading_session     STRING      COMMENT 'Phiên: Asia/Europe/US/Off-hours'
-)
-COMMENT 'Dimension: Chiều thời gian theo giờ phút giây'
-STORED AS PARQUET;
+DROP VIEW IF EXISTS vw_dim_time;
 
--- Generate DIM_TIME từ bảng raw crypto_trades bằng Spark SQL
-INSERT INTO dim_time
+CREATE VIEW vw_dim_time AS
 SELECT DISTINCT
-    CAST(DATE_FORMAT(time, 'HHmmss') AS INT)         AS time_key,
+    CAST(DATE_FORMAT(time, 'HHmmss') AS INT)          AS time_key,
     HOUR(time)                                        AS hour,
     MINUTE(time)                                      AS minute,
     SECOND(time)                                      AS second,
     CASE
-        WHEN HOUR(time) BETWEEN 6  AND 11 THEN 'Morning'
+        WHEN HOUR(time) BETWEEN  6 AND 11 THEN 'Morning'
         WHEN HOUR(time) BETWEEN 12 AND 17 THEN 'Afternoon'
         WHEN HOUR(time) BETWEEN 18 AND 21 THEN 'Evening'
-        ELSE                                   'Night'
+        ELSE                                    'Night'
     END                                               AS period,
-    -- Phiên giao dịch (UTC+7):
-    -- Asia:   01:00 - 09:00 (Tokyo, Singapore)
-    -- Europe: 14:00 - 22:00 (London)
-    -- US:     19:30 - 04:00 (New York)
     CASE
-        WHEN HOUR(time) BETWEEN 1  AND 9  THEN 'Asia'
+        WHEN HOUR(time) BETWEEN  1 AND  9 THEN 'Asia'
         WHEN HOUR(time) BETWEEN 14 AND 21 THEN 'Europe'
-        WHEN HOUR(time) >= 19 OR HOUR(time) <= 4 THEN 'US'
+        WHEN HOUR(time) >= 20 OR HOUR(time) <= 4 THEN 'US'
         ELSE                                         'Off-hours'
     END                                               AS trading_session
-FROM crypto_trades
-ORDER BY time_key;
+FROM crypto_trades;
 
 
--- =============================================================================
--- FACT TABLE
--- Tạo sau khi đã có đủ dữ liệu trong tất cả dimension tables
--- =============================================================================
-
--- -----------------------------------------------------------------------------
--- FACT_CRYPTO_TRADES — Bảng sự kiện chính
--- Mỗi row = 1 giao dịch crypto được ghi nhận từ Finnhub
--- Partition by date_key để tối ưu query theo ngày
--- -----------------------------------------------------------------------------
-DROP TABLE IF EXISTS fact_crypto_trades;
-CREATE TABLE fact_crypto_trades (
-    trade_id            BIGINT      COMMENT 'Surrogate key tự tăng (PK)',
-    date_key            INT         COMMENT 'FK → dim_date.date_key (YYYYMMDD)',
-    time_key            INT         COMMENT 'FK → dim_time.time_key (HHMMSS)',
-    symbol_key          INT         COMMENT 'FK → dim_symbol.symbol_key',
-    exchange_key        INT         COMMENT 'FK → dim_exchange.exchange_key',
-    price               DOUBLE      COMMENT 'Giá giao dịch tại thời điểm đó (USDT)',
-    volume              DOUBLE      COMMENT 'Khối lượng giao dịch (số coin)',
-    trade_value         DOUBLE      COMMENT 'Tổng giá trị = price × volume (USDT)',
-    ingested_at         TIMESTAMP   COMMENT 'Thời điểm Spark ghi dữ liệu vào Hive'
-)
-COMMENT 'Fact Table: Mỗi giao dịch crypto real-time từ Finnhub'
-PARTITIONED BY (trade_date STRING COMMENT 'Partition: yyyy-MM-dd để tăng tốc query theo ngày')
-STORED AS PARQUET;
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║  PHẦN 3: FACT TABLE (LOGICAL VIEW)                                      ║
+-- ║  Trái tim của Star Schema — View trỏ thẳng vào luồng Streaming         ║
+-- ║  Real-time 100%: Mỗi lần Superset query = lấy data mới nhất            ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
 
 
 -- -----------------------------------------------------------------------------
--- ETL: Load dữ liệu từ bảng raw crypto_trades vào FACT_CRYPTO_TRADES
--- Chạy lệnh này sau khi đã tạo đủ các bảng dim và đã có data trong crypto_trades
+-- VW_FACT_CRYPTO_TRADES — Bảng sự kiện chính (View ảo)
+--
+-- Mỗi dòng = 1 giao dịch crypto đã qua bước Data Cleaning trên Spark
+-- View này JOIN bảng crypto_trades (đang real-time) với dim_symbol
+-- để gắn symbol_key, đồng thời tính date_key, time_key, trade_value
+--
+-- Ưu điểm:
+--   • Không chiếm thêm dung lượng HDFS (0 bytes dư thừa)
+--   • Luôn phản ánh dữ liệu mới nhất (real-time)
+--   • Superset query trực tiếp trên View = Star Schema chuẩn
 -- -----------------------------------------------------------------------------
-SET hive.exec.dynamic.partition = true;
-SET hive.exec.dynamic.partition.mode = nonstrict;
+DROP VIEW IF EXISTS vw_fact_crypto_trades;
 
-INSERT INTO fact_crypto_trades PARTITION (trade_date)
+CREATE VIEW vw_fact_crypto_trades AS
 SELECT
-    -- Sinh trade_id bằng monotonically_increasing_id() trong Spark,
-    -- hoặc dùng ROW_NUMBER() ở đây cho Spark SQL
-    ROW_NUMBER() OVER (ORDER BY t.time)                             AS trade_id,
+    -- ═══ Surrogate Key ═══
+    ROW_NUMBER() OVER (ORDER BY t.time)                        AS trade_id,
 
-    -- FK: date_key từ DIM_DATE
-    CAST(DATE_FORMAT(t.time, 'yyyyMMdd') AS INT)                    AS date_key,
+    -- ═══ Foreign Keys (liên kết tới Dimensions) ═══
+    CAST(DATE_FORMAT(t.time, 'yyyyMMdd') AS INT)               AS date_key,
+    CAST(DATE_FORMAT(t.time, 'HHmmss')  AS INT)                AS time_key,
+    ds.symbol_key                                               AS symbol_key,
+    1                                                           AS exchange_key,
 
-    -- FK: time_key từ DIM_TIME
-    CAST(DATE_FORMAT(t.time, 'HHmmss') AS INT)                      AS time_key,
+    -- ═══ Measures (Chỉ số đo lường) ═══
+    t.price                                                     AS price,
+    t.volume                                                    AS volume,
+    ROUND(t.price * t.volume, 6)                                AS trade_value,
 
-    -- FK: symbol_key từ DIM_SYMBOL (lookup theo symbol string)
-    ds.symbol_key                                                    AS symbol_key,
-
-    -- FK: exchange_key từ DIM_EXCHANGE (hiện chỉ có BINANCE = 1)
-    1                                                                AS exchange_key,
-
-    -- Measures (các chỉ số đo lường)
-    t.price                                                          AS price,
-    t.volume                                                         AS volume,
-    ROUND(t.price * t.volume, 6)                                     AS trade_value,
-
-    -- Metadata
-    CURRENT_TIMESTAMP()                                              AS ingested_at,
-
-    -- Partition column
-    DATE_FORMAT(t.time, 'yyyy-MM-dd')                               AS trade_date
+    -- ═══ Metadata ═══
+    t.time                                                      AS trade_time
 
 FROM crypto_trades t
 JOIN dim_symbol ds ON t.symbol = ds.symbol;
 
 
--- =============================================================================
--- KIỂM TRA DỮ LIỆU SAU KHI LOAD
--- =============================================================================
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║  PHẦN 4: KIỂM TRA DỮ LIỆU (VALIDATION)                                ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
 
--- Đếm tổng số bản ghi trong từng bảng
-SELECT 'dim_exchange'      AS table_name, COUNT(*) AS row_count FROM dim_exchange
+-- 4.1: Đếm số dòng trong từng bảng/view
+SELECT 'dim_exchange (Physical)'         AS object_name, COUNT(*) AS rows FROM dim_exchange
 UNION ALL
-SELECT 'dim_symbol'        AS table_name, COUNT(*) AS row_count FROM dim_symbol
+SELECT 'dim_symbol (Physical)'           AS object_name, COUNT(*) AS rows FROM dim_symbol
 UNION ALL
-SELECT 'dim_date'          AS table_name, COUNT(*) AS row_count FROM dim_date
+SELECT 'vw_dim_date (View)'              AS object_name, COUNT(*) AS rows FROM vw_dim_date
 UNION ALL
-SELECT 'dim_time'          AS table_name, COUNT(*) AS row_count FROM dim_time
+SELECT 'vw_dim_time (View)'              AS object_name, COUNT(*) AS rows FROM vw_dim_time
 UNION ALL
-SELECT 'fact_crypto_trades' AS table_name, COUNT(*) AS row_count FROM fact_crypto_trades;
+SELECT 'vw_fact_crypto_trades (View)'    AS object_name, COUNT(*) AS rows FROM vw_fact_crypto_trades;
 
 
--- Kiểm tra dữ liệu mẫu trong FACT (kèm dim join)
+-- 4.2: Xem dữ liệu mẫu trong Fact View (kèm join đầy đủ Star Schema)
 SELECT
     f.trade_id,
-    d.full_date,
-    t.hour,
-    t.minute,
-    t.trading_session,
-    s.asset_name,
-    s.base_currency,
-    e.exchange_name,
+    f.trade_time,
+    dd.full_date,
+    dd.day_name,
+    dt.hour,
+    dt.minute,
+    dt.trading_session,
+    ds.asset_name,
+    ds.base_currency,
+    ds.market_cap_tier,
+    de.exchange_name,
     f.price,
     f.volume,
     f.trade_value
-FROM fact_crypto_trades f
-JOIN dim_date     d ON f.date_key     = d.date_key
-JOIN dim_time     t ON f.time_key     = t.time_key
-JOIN dim_symbol   s ON f.symbol_key   = s.symbol_key
-JOIN dim_exchange e ON f.exchange_key = e.exchange_key
+FROM vw_fact_crypto_trades f
+JOIN vw_dim_date   dd ON f.date_key     = dd.date_key
+JOIN vw_dim_time   dt ON f.time_key     = dt.time_key
+JOIN dim_symbol    ds ON f.symbol_key   = ds.symbol_key
+JOIN dim_exchange  de ON f.exchange_key = de.exchange_key
+ORDER BY f.trade_time DESC
 LIMIT 20;
 
 
--- =============================================================================
--- CÁC QUERY PHÂN TÍCH CHO SUPERSET DASHBOARD
--- =============================================================================
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║  PHẦN 5: CÁC QUERY PHÂN TÍCH CHO SUPERSET DASHBOARD                    ║
+-- ║  Copy trực tiếp vào SQL Lab của Superset để tạo Dataset / Chart         ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
 
--- Query 1: Giá trung bình theo giờ từng đồng tiền (Line Chart)
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 1: Line Chart — Giá trung bình theo giờ từng đồng tiền
+-- Dùng cho: Time-series line chart trong Superset
+-- ─────────────────────────────────────────────────────────────────────────────
 SELECT
-    d.full_date,
-    t.hour,
-    s.asset_name,
-    ROUND(AVG(f.price), 2)          AS avg_price,
-    ROUND(MAX(f.price), 2)          AS high_price,
-    ROUND(MIN(f.price), 2)          AS low_price
-FROM fact_crypto_trades f
-JOIN dim_date   d ON f.date_key   = d.date_key
-JOIN dim_time   t ON f.time_key   = t.time_key
-JOIN dim_symbol s ON f.symbol_key = s.symbol_key
-GROUP BY d.full_date, t.hour, s.asset_name
-ORDER BY d.full_date, t.hour;
+    dd.full_date,
+    dt.hour,
+    ds.asset_name,
+    ROUND(AVG(f.price), 2)       AS avg_price,
+    ROUND(MAX(f.price), 2)       AS high_price,
+    ROUND(MIN(f.price), 2)       AS low_price,
+    COUNT(*)                     AS trade_count
+FROM vw_fact_crypto_trades f
+JOIN vw_dim_date   dd ON f.date_key   = dd.date_key
+JOIN vw_dim_time   dt ON f.time_key   = dt.time_key
+JOIN dim_symbol    ds ON f.symbol_key = ds.symbol_key
+GROUP BY dd.full_date, dt.hour, ds.asset_name
+ORDER BY dd.full_date, dt.hour;
 
 
--- Query 2: Tổng volume và giá trị giao dịch theo phiên (Bar Chart)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 2: Bar Chart — Volume theo phiên giao dịch (Asia/Europe/US)
+-- Dùng cho: Grouped bar chart so sánh khối lượng
+-- ─────────────────────────────────────────────────────────────────────────────
 SELECT
-    t.trading_session,
-    s.asset_name,
-    ROUND(SUM(f.volume), 4)         AS total_volume,
-    ROUND(SUM(f.trade_value), 2)    AS total_usd_value,
-    COUNT(f.trade_id)               AS trade_count
-FROM fact_crypto_trades f
-JOIN dim_time   t ON f.time_key   = t.time_key
-JOIN dim_symbol s ON f.symbol_key = s.symbol_key
-GROUP BY t.trading_session, s.asset_name
+    dt.trading_session,
+    ds.asset_name,
+    ROUND(SUM(f.volume), 4)      AS total_volume,
+    ROUND(SUM(f.trade_value), 2) AS total_usd_value,
+    COUNT(*)                     AS trade_count
+FROM vw_fact_crypto_trades f
+JOIN vw_dim_time   dt ON f.time_key   = dt.time_key
+JOIN dim_symbol    ds ON f.symbol_key = ds.symbol_key
+GROUP BY dt.trading_session, ds.asset_name
 ORDER BY total_usd_value DESC;
 
 
--- Query 3: Bảng OHLC theo ngày (Candlestick / Table)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 3: Pie Chart — Tỷ trọng giao dịch theo đồng tiền
+-- Dùng cho: Donut/Pie chart phân bổ portfolio
+-- ─────────────────────────────────────────────────────────────────────────────
 SELECT
-    d.full_date,
-    s.symbol_code,
-    ROUND(FIRST_VALUE(f.price) OVER (
-        PARTITION BY d.full_date, s.symbol_code
-        ORDER BY f.time_key ASC), 2)                AS open_price,
-    ROUND(LAST_VALUE(f.price) OVER (
-        PARTITION BY d.full_date, s.symbol_code
-        ORDER BY f.time_key ASC), 2)                AS close_price,
-    ROUND(MAX(f.price), 2)                           AS high_price,
-    ROUND(MIN(f.price), 2)                           AS low_price,
-    ROUND(SUM(f.volume), 4)                          AS total_volume
-FROM fact_crypto_trades f
-JOIN dim_date   d ON f.date_key   = d.date_key
-JOIN dim_symbol s ON f.symbol_key = s.symbol_key
-GROUP BY d.full_date, s.symbol_code, f.price, f.time_key;
+    ds.asset_name,
+    ds.market_cap_tier,
+    COUNT(*)                          AS so_giao_dich,
+    ROUND(SUM(f.trade_value), 2)     AS tong_gia_tri_usd,
+    ROUND(SUM(f.volume), 4)          AS tong_volume
+FROM vw_fact_crypto_trades f
+JOIN dim_symbol ds ON f.symbol_key = ds.symbol_key
+GROUP BY ds.asset_name, ds.market_cap_tier;
 
 
--- Query 4: Big Number — Giá mới nhất từng đồng tiền (Superset Big Number)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 4: Big Number — Giá mới nhất từng đồng (Real-time indicator)
+-- Dùng cho: Big Number card trên đầu Dashboard
+-- ─────────────────────────────────────────────────────────────────────────────
 SELECT
-    s.asset_name,
-    s.base_currency,
-    f.price         AS latest_price,
-    f.trade_value   AS latest_trade_value,
-    f.ingested_at   AS last_updated
-FROM fact_crypto_trades f
-JOIN dim_symbol s ON f.symbol_key = s.symbol_key
-WHERE f.trade_id IN (
-    SELECT MAX(trade_id)
-    FROM fact_crypto_trades
-    GROUP BY symbol_key
+    ds.asset_name,
+    ds.base_currency,
+    f.price                AS latest_price,
+    f.volume               AS latest_volume,
+    f.trade_value          AS latest_trade_value,
+    f.trade_time           AS last_updated
+FROM vw_fact_crypto_trades f
+JOIN dim_symbol ds ON f.symbol_key = ds.symbol_key
+WHERE f.trade_time = (
+    SELECT MAX(f2.trade_time)
+    FROM vw_fact_crypto_trades f2
+    WHERE f2.symbol_key = f.symbol_key
 );
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 5: Table — Top giao dịch có giá trị lớn nhất (Whale Alert)
+-- Dùng cho: Data table sắp xếp theo trade_value giảm dần
+-- ─────────────────────────────────────────────────────────────────────────────
+SELECT
+    f.trade_time,
+    ds.asset_name,
+    de.exchange_name,
+    f.price,
+    f.volume,
+    f.trade_value          AS value_usd,
+    dt.trading_session
+FROM vw_fact_crypto_trades f
+JOIN dim_symbol    ds ON f.symbol_key   = ds.symbol_key
+JOIN dim_exchange  de ON f.exchange_key = de.exchange_key
+JOIN vw_dim_time   dt ON f.time_key    = dt.time_key
+ORDER BY f.trade_value DESC
+LIMIT 50;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 6: Heatmap — Phân bố giao dịch theo Giờ × Ngày trong tuần
+-- Dùng cho: Calendar heatmap trong Superset
+-- ─────────────────────────────────────────────────────────────────────────────
+SELECT
+    dd.day_name,
+    dt.hour,
+    COUNT(*)                         AS trade_count,
+    ROUND(AVG(f.price), 2)          AS avg_price,
+    ROUND(SUM(f.trade_value), 2)    AS total_value
+FROM vw_fact_crypto_trades f
+JOIN vw_dim_date dd ON f.date_key = dd.date_key
+JOIN vw_dim_time dt ON f.time_key = dt.time_key
+GROUP BY dd.day_name, dt.hour
+ORDER BY dd.day_name, dt.hour;

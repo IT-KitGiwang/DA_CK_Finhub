@@ -17,6 +17,7 @@ services:
     volumes:
       - master-hdfs-data:/opt/hadoop/data
       - ./config:/config-template
+      - ./src:/home/dack15/src        # Mount code trực tiếp: sửa trên máy → container thấy ngay
     networks:
       - hadoop-net
 
