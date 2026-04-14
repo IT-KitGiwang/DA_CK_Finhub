@@ -1,8 +1,8 @@
 """
-Spark Streaming Processor with Data Cleaning Pipeline
+Trình Xử Lý Dữ Liệu Thời Gian Thực Bằng Spark Streaming
 ===================================================
-Pipeline: Finnhub WebSocket → Kafka → [SPARK CLEANING] → Hive (HDFS / Parquet)
-Layer:    Bronze (Raw Kafka) → Silver (Cleaned) → Hive table (crypto_trades)
+Luồng dữ liệu (Pipeline): Finnhub WebSocket → Kafka → [SPARK LÀM SẠCH] → Hive (HDFS / Parquet)
+Phân lớp (Layer):    Lớp Đồng (Raw Kafka) → Lớp Bạc (Cleaned) → Bảng Hive (crypto_trades)
 """
 
 import logging
@@ -13,14 +13,14 @@ from pyspark.sql.functions import (
 )
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
-# Setup Logging
+# Cấu hình mức độ Log
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [SPARK] %(levelname)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# Constants and Configurations
+# Các Hằng Số và Cấu Hình Cơ Bản
 VALID_SYMBOLS = [
     "BINANCE:BTCUSDT",
     "BINANCE:ETHUSDT",
@@ -39,24 +39,24 @@ MAX_VOLUME = {
     "BINANCE:BNBUSDT": 100000,
 }
 
-MAX_FUTURE_SECONDS = 86400      # 24 hours
-MAX_PAST_SECONDS   = 2592000    # 30 days
+MAX_FUTURE_SECONDS = 86400      # 24 giờ
+MAX_PAST_SECONDS   = 2592000    # 30 ngày
 
 
 def clean_data(raw_df: DataFrame) -> DataFrame:
     """
-    Applies a 7-step data cleaning pipeline to the raw DataFrame.
+    Áp dụng quy trình kỹ thuật làm sạch dữ liệu 7 bước lên DataFrame thô.
     """
-    # 1. Null Elimination: Drop rows with essential missing values
+    # 1. Loại bỏ Null: Xóa các dòng bị khuyết các trường quan trọng
     step1_df = raw_df.dropna(how="any", subset=["time", "symbol", "price", "volume"])
 
-    # 2. String Normalization: Trim and uppercase symbols
+    # 2. Chuẩn hóa chuỗi: Cắt bỏ khoảng trắng dư thừa và in hoa (Uppercase) tên đồng token
     step2_df = step1_df.withColumn("symbol", upper(trim(col("symbol"))))
 
-    # 3. Symbol Whitelist: Keep only registered symbols
+    # 3. Lọc danh sách trắng (Whitelist): Chỉ giữ lại các mã Token đã được cấp phép
     step3_df = step2_df.filter(col("symbol").isin(VALID_SYMBOLS))
 
-    # 4. Price Validation: Ensure price is within realistic bounds
+    # 4. Xác thực Giá (Price): Đảm bảo giá trị nằm trong ngưỡng hợp lý (loại trừ giá trị rác)
     price_condition = lit(False)
     for symbol, bounds in PRICE_BOUNDS.items():
         price_condition |= (
@@ -66,7 +66,7 @@ def clean_data(raw_df: DataFrame) -> DataFrame:
         )
     step4_df = step3_df.filter(price_condition)
 
-    # 5. Volume Validation: Ensure strictly positive volume within typical limits
+    # 5. Xác thực Khối Lượng (Volume): Phải dương và không vượt quá giới hạn cực đoan
     volume_condition = lit(False)
     for symbol, max_vol in MAX_VOLUME.items():
         volume_condition |= (
@@ -76,7 +76,7 @@ def clean_data(raw_df: DataFrame) -> DataFrame:
         )
     step5_df = step4_df.filter(volume_condition)
 
-    # 6. Timestamp Validation: Avoid extreme future or past timestamps
+    # 6. Xác thực Thời Gian (Timestamp): Khử các gói tin từ tương lai quá xa hoặc quá khứ xa
     current_time = unix_timestamp(current_timestamp())
     record_time = unix_timestamp(col("time"))
     step6_df = step5_df.filter(
@@ -84,15 +84,15 @@ def clean_data(raw_df: DataFrame) -> DataFrame:
         (record_time >= current_time - MAX_PAST_SECONDS)
     )
 
-    # 7. Deduplication: Remove redundant messages in the micro-batch
+    # 7. Khử trùng lặp (Deduplication): Loại bỏ bản ghi lặp lại trong cùng Micro-batch
     step7_df = step6_df.dropDuplicates(["time", "symbol", "price", "volume"])
 
-    logger.info("Data Cleaning Pipeline completed — 7/7 steps applied successfully.")
+    logger.info("Hoàn tất tiến trình xử lý Data Cleaning — Thực thi thành công toàn bộ 7/7 bước.")
     return step7_df
 
 
 def main() -> None:
-    logger.info("Initializing Spark Session for Hive & Kafka streaming...")
+    logger.info("Đang khởi tạo Spark Session cho Hive & Kafka streaming...")
 
     spark = SparkSession.builder \
         .appName("CryptoKafkaToHive") \
@@ -108,7 +108,7 @@ def main() -> None:
 
     spark.sparkContext.setLogLevel("WARN")
 
-    # Fixed schema mapping Finnhub structured payload
+    # Bản đồ Schema ánh xạ tương thích với JSON được gửi từ Finnhub
     schema = StructType([
         StructField("time",   StringType(),  True),
         StructField("symbol", StringType(),  True),
@@ -116,7 +116,7 @@ def main() -> None:
         StructField("volume", DoubleType(),  True)
     ])
 
-    logger.info("Reading stream from Kafka topic 'crypto_trades'...")
+    logger.info("Đang đọc luồng Streaming từ topic 'crypto_trades' trong cụm Kafka...")
 
     raw_df = spark.readStream \
         .format("kafka") \
@@ -125,16 +125,16 @@ def main() -> None:
         .option("startingOffsets", "earliest") \
         .load()
 
-    # Parse JSON from Kafka value -> string -> JSON object
+    # Dịch nguyên bản luồng JSON tải trọng (Payload) từ định nghĩa Chuỗi text sang cấu trúc JSON Struct
     parsed_df = raw_df.selectExpr("CAST(value AS STRING)") \
         .select(from_json(col("value"), schema).alias("data")) \
         .select("data.*") \
         .withColumn("time", to_timestamp(col("time")))
 
-    logger.info("Applying 7-step Data Cleaning Pipeline (Bronze -> Silver)...")
+    logger.info("Thực thi cơ chế làm sạch Dữ Liệu 7 Bước Đạt Chuẩn (Chuyển Hóa Bronze -> Silver)...")
     cleaned_df = clean_data(parsed_df)
 
-    logger.info("Writing cleaned stream to Hive table 'crypto_trades'...")
+    logger.info("Bắt đầu ghi phân mảnh luồng dữ liệu sạch trực tiếp tới Hệ Thống Hive 'crypto_trades'...")
     query = cleaned_df.writeStream \
         .outputMode("append") \
         .option("checkpointLocation", "/tmp/spark_checkpoint_crypto_final") \
@@ -143,7 +143,7 @@ def main() -> None:
     try:
         query.awaitTermination()
     except Exception as e:
-        logger.error(f"Spark streaming pipeline terminated exceptionally: {e}")
+        logger.error(f"Khối lượng công việc Spark Streaming gián đoạn đột ngột: {e}")
 
 
 if __name__ == "__main__":

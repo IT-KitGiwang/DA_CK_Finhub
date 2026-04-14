@@ -1,7 +1,7 @@
 """
-Kafka Producer for Finnhub Real-time Trades
-Connects to Finnhub WebSocket API to scrape real-time market data
-and publishes the formatted payload directly to an Apache Kafka branch.
+Kafka Producer cho Dữ liệu Tài sản số Thời gian thực (Real-time Crypto Trades)
+Kết nối với Finnhub WebSocket API để thu thập dữ liệu giao dịch thị trường theo thời gian thực
+và đẩy gói dữ liệu đã được định dạng trực tiếp vào hệ thống Apache Kafka.
 """
 
 import websocket
@@ -13,12 +13,12 @@ from datetime import datetime
 from kafka import KafkaProducer
 from typing import Dict, Any, List
 
-# Configure application logging
+# Cấu hình logging cho ứng dụng
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [PRODUCER] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 def load_dotenv_file(path: str = ".env") -> None:
-    """Loads environment variables securely from .env if present."""
+    """Đọc các biến môi trường một cách bảo mật từ file .env nếu có."""
     if not os.path.exists(path):
         return
     with open(path, "r", encoding="utf-8") as env_file:
@@ -30,12 +30,12 @@ def load_dotenv_file(path: str = ".env") -> None:
             os.environ.setdefault(key.strip(), value.strip())
 
 class FinnhubCryptoProducer:
-    """Class to manage Finnhub WebSocket connection and Kafka Publishing."""
+    """Lớp quản lý kết nối Finnhub WebSocket chạy ngầm và Đẩy dữ liệu vào Kafka."""
     
     def __init__(self):
         self.api_key: str = os.getenv("FINNHUB_API_KEY", "")
         if not self.api_key:
-            raise ValueError("Configuration Missing: FINNHUB_API_KEY in .env")
+            raise ValueError("Thiếu cấu hình: Cần có FINNHUB_API_KEY trong file .env")
 
         self.kafka_broker: str = os.getenv("KAFKA_BROKER", "localhost:9094")
         self.kafka_topic: str = os.getenv("KAFKA_TOPIC", "crypto_trades")
@@ -46,7 +46,7 @@ class FinnhubCryptoProducer:
         self.scrape_interval: float = float(os.getenv("SCRAPE_INTERVAL", "1.0"))
         self.last_sent_times: Dict[str, float] = {}
 
-        logger.info(f"Connecting to Kafka Broker sequence: {self.kafka_broker}...")
+        logger.info(f"Đang kết nối đến Kafka Broker tại: {self.kafka_broker}...")
         self.producer = KafkaProducer(
             bootstrap_servers=[self.kafka_broker],
             value_serializer=lambda v: json.dumps(v).encode('utf-8')
@@ -54,14 +54,14 @@ class FinnhubCryptoProducer:
         self.ws = None
 
     def on_message(self, ws, message: str) -> None:
-        """Callback triggered when a WebSocket message is received."""
+        """Hàm kích hoạt (Callback) mỗi khi có dòng dữ liệu mới đổ về từ WebSocket."""
         data: Dict[str, Any] = json.loads(message)
 
         if data.get("type") == "trade":
             for trade in data.get("data", []):
                 symbol: str = trade.get("s")
                 
-                # Rate Limiting: Respect SCRAPE_INTERVAL per symbol
+                # Giới hạn tốc độ lấy dữ liệu (Rate Limiting) dựa trên SCRAPE_INTERVAL
                 current_time = time.time()
                 if symbol in self.last_sent_times and current_time - self.last_sent_times[symbol] < self.scrape_interval:
                     continue
@@ -72,7 +72,7 @@ class FinnhubCryptoProducer:
                 volume: float = trade.get("v")
                 timestamp: int = trade.get("t")
 
-                # Parse and render standardized timestamp format
+                # Parse và định dạng lại mốc thời gian (timestamp) theo chuẩn
                 time_str = datetime.fromtimestamp(timestamp / 1000).strftime('%Y-%m-%d %H:%M:%S')
 
                 payload = {
@@ -82,30 +82,30 @@ class FinnhubCryptoProducer:
                     "volume": volume
                 }
 
-                # Push dynamically to Kafka Stream
+                # Đẩy luồng dữ liệu (Push) động lên hệ thống Kafka
                 self.producer.send(self.kafka_topic, value=payload)
                 logger.info(f"[KAFKA SENT] - {time_str} | {symbol} | Price: {price} | Vol: {volume}")
 
     def on_error(self, ws, error: Exception) -> None:
-        """Callback for network or parsing errors."""
-        logger.error(f"WebSocket Error Received: {error}")
+        """Hàm ghi nhận lỗi khi mạng rớt hoặc phân tách dữ liệu lỗi."""
+        logger.error(f"Đã bắt gặp lỗi từ WebSocket: {error}")
 
     def on_close(self, ws, close_status_code, close_msg) -> None:
-        """Callback on WebSocket closure."""
-        logger.warning(f"WebSocket Closed. Code: {close_status_code}, Message: {close_msg}")
+        """Hàm kích hoạt khi WebSocket bị ngắt."""
+        logger.warning(f"WebSocket đã đóng. Mã đóng (Code): {close_status_code}, Tin nhắn (Message): {close_msg}")
         self.producer.close()
 
     def on_open(self, ws) -> None:
-        """Callback explicitly tracking the active socket connection start."""
-        logger.info("Successfully connected to Finnhub WebSocket API!")
+        """Hàm báo cáo chính thức kết nối hoàn tất."""
+        logger.info("Kết nối thành công tới Finnhub WebSocket API!")
         
-        # Dispatch subscription commands
+        # Gửi lệnh đăng ký lắng nghe (Subscribe) cho các đồng Token được quy định
         for symbol in self.symbols:
             ws.send(json.dumps({"type": "subscribe", "symbol": symbol}))
-            logger.info(f"Subscribed explicitly to sequence: {symbol}")
+            logger.info(f"Đã gửi lệnh Subscribe theo dõi: {symbol}")
 
     def start(self) -> None:
-        """Starts the WebSocket event loop."""
+        """Hàm khởi động vòng lặp sự kiện bất tận (Event Loop) của WebSocket."""
         socket_url = f"wss://ws.finnhub.io?token={self.api_key}"
         self.ws = websocket.WebSocketApp(
             socket_url,
@@ -115,15 +115,15 @@ class FinnhubCryptoProducer:
             on_close=self.on_close
         )
         
-        logger.info("Initiating Producer Execution Loop. Press Ctrl+C to terminate.")
+        logger.info("Bắt đầu vòng lặp Producer. Nhấn Ctrl+C để ngừng quá trình ép dữ liệu.")
         try:
             self.ws.run_forever()
         except KeyboardInterrupt:
             self.producer.close()
-            logger.info("User requested shutdown. Producer successfully terminated.")
+            logger.info("Người dùng yêu cầu thoát. Đã tắt an toàn Producer.")
 
 def main() -> None:
-    # Set up runtime configuration and dispatch
+    # Nạp các tuỳ chỉnh môi trường và bắt đầu chạy Kafka
     load_dotenv_file()
     producer = FinnhubCryptoProducer()
     producer.start()
