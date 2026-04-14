@@ -27,68 +27,40 @@ VALID_SYMBOLS = [
     "BINANCE:BNBUSDT"
 ]
 
-PRICE_BOUNDS = {
-    "BINANCE:BTCUSDT": {"min": 1000,   "max": 500000},
-    "BINANCE:ETHUSDT": {"min": 50,     "max": 50000},
-    "BINANCE:BNBUSDT": {"min": 10,     "max": 5000},
-}
-
-MAX_VOLUME = {
-    "BINANCE:BTCUSDT": 1000,
-    "BINANCE:ETHUSDT": 50000,
-    "BINANCE:BNBUSDT": 100000,
-}
-
 MAX_FUTURE_SECONDS = 86400      # 24 giờ
 MAX_PAST_SECONDS   = 2592000    # 30 ngày
 
 
 def clean_data(raw_df: DataFrame) -> DataFrame:
     """
-    Áp dụng quy trình kỹ thuật làm sạch dữ liệu 7 bước lên DataFrame thô.
+    Áp dụng quy trình kỹ thuật làm sạch và làm giàu dữ liệu lên DataFrame thô.
     """
-    # 1. Loại bỏ Null: Xóa các dòng bị khuyết các trường quan trọng
+    # 1. Loại bỏ Null: Xóa các dòng bị khuyết các trường quan trọng (Sự cố bắt packet)
     step1_df = raw_df.dropna(how="any", subset=["time", "symbol", "price", "volume"])
 
-    # 2. Chuẩn hóa chuỗi: Cắt bỏ khoảng trắng dư thừa và in hoa (Uppercase) tên đồng token
+    # 2. Chuẩn hóa chuỗi: Cắt bỏ khoảng trắng dư thừa và in hoa tên token nhằm tránh lỗi định dạng
     step2_df = step1_df.withColumn("symbol", upper(trim(col("symbol"))))
 
-    # 3. Lọc danh sách trắng (Whitelist): Chỉ giữ lại các mã Token đã được cấp phép
+    # 3. Lọc danh sách trắng (Whitelist): Chỉ xử lý các coin có trong danh mục đang theo dõi
     step3_df = step2_df.filter(col("symbol").isin(VALID_SYMBOLS))
 
-    # 4. Xác thực Giá (Price): Đảm bảo giá trị nằm trong ngưỡng hợp lý (loại trừ giá trị rác)
-    price_condition = lit(False)
-    for symbol, bounds in PRICE_BOUNDS.items():
-        price_condition |= (
-            (col("symbol") == symbol) &
-            (col("price") >= bounds["min"]) &
-            (col("price") <= bounds["max"])
-        )
-    step4_df = step3_df.filter(price_condition)
+    # 4. Xác thực Hợp lý Về Mặt Toán Học (Không hardcode ngưỡng):
+    # Dù giá chạy theo thị trường, nhưng price và volume luôn phi vật lý nếu nhỏ hơn hoặc bằng 0
+    step4_df = step3_df.filter((col("price") > 0) & (col("volume") > 0))
 
-    # 5. Xác thực Khối Lượng (Volume): Phải dương và không vượt quá giới hạn cực đoan
-    volume_condition = lit(False)
-    for symbol, max_vol in MAX_VOLUME.items():
-        volume_condition |= (
-            (col("symbol") == symbol) &
-            (col("volume") > 0) &
-            (col("volume") <= max_vol)
-        )
-    step5_df = step4_df.filter(volume_condition)
-
-    # 6. Xác thực Thời Gian (Timestamp): Khử các gói tin từ tương lai quá xa hoặc quá khứ xa
+    # 5. Xác thực Thời Gian (Timestamp): Khử các gói tin từ tương lai quá xa hoặc quá khứ xa do lệch kim đồng hồ (Clock Drift)
     current_time = unix_timestamp(current_timestamp())
     record_time = unix_timestamp(col("time"))
-    step6_df = step5_df.filter(
+    step5_df = step4_df.filter(
         (record_time <= current_time + MAX_FUTURE_SECONDS) &
         (record_time >= current_time - MAX_PAST_SECONDS)
     )
 
-    # 7. Khử trùng lặp (Deduplication): Loại bỏ bản ghi lặp lại trong cùng Micro-batch
-    step7_df = step6_df.dropDuplicates(["time", "symbol", "price", "volume"])
+    # 6. Khử trùng lặp (Deduplication): Loại bỏ bản ghi có thể bị gởi đúp từ cơ chế at-least-once của Kafka
+    step6_df = step5_df.dropDuplicates(["time", "symbol", "price", "volume"])
 
-    logger.info("Hoàn tất tiến trình xử lý Data Cleaning — Thực thi thành công toàn bộ 7/7 bước.")
-    return step7_df
+    logger.info("Hoàn tất tiến trình xử lý Data Cleaning hợp lý (6 bước bảo vệ cốt lõi).")
+    return step6_df
 
 
 def main() -> None:
