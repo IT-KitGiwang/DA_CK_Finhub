@@ -54,7 +54,9 @@ STORED AS PARQUET;
 INSERT INTO dim_symbol VALUES
     (1, 'BINANCE:BTCUSDT', 'BTCUSDT', 'BTC', 'USDT', 'Bitcoin',  'Cryptocurrency', 'Large-cap'),
     (2, 'BINANCE:ETHUSDT', 'ETHUSDT', 'ETH', 'USDT', 'Ethereum', 'Cryptocurrency', 'Large-cap'),
-    (3, 'BINANCE:BNBUSDT', 'BNBUSDT', 'BNB', 'USDT', 'BNB',      'Cryptocurrency', 'Mid-cap');
+    (3, 'BINANCE:BNBUSDT', 'BNBUSDT', 'BNB', 'USDT', 'BNB',      'Cryptocurrency', 'Mid-cap'),
+    (4, 'BINANCE:SOLUSDT', 'SOLUSDT', 'SOL', 'USDT', 'Solana',   'Cryptocurrency', 'Large-cap'),
+    (5, 'BINANCE:DOGEUSDT','DOGEUSDT','DOGE','USDT', 'Dogecoin', 'Cryptocurrency', 'Large-cap');
 
 
 -- =============================================================================

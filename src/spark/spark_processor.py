@@ -24,19 +24,25 @@ logger = logging.getLogger(__name__)
 VALID_SYMBOLS = [
     "BINANCE:BTCUSDT",
     "BINANCE:ETHUSDT",
-    "BINANCE:BNBUSDT"
+    "BINANCE:BNBUSDT",
+    "BINANCE:SOLUSDT",
+    "BINANCE:DOGEUSDT"
 ]
 
 PRICE_BOUNDS = {
     "BINANCE:BTCUSDT": {"min": 1000,   "max": 500000},
     "BINANCE:ETHUSDT": {"min": 50,     "max": 50000},
     "BINANCE:BNBUSDT": {"min": 10,     "max": 5000},
+    "BINANCE:SOLUSDT": {"min": 1,      "max": 1000},
+    "BINANCE:DOGEUSDT":{"min": 0.001,  "max": 10},
 }
 
 MAX_VOLUME = {
     "BINANCE:BTCUSDT": 1000,
     "BINANCE:ETHUSDT": 50000,
     "BINANCE:BNBUSDT": 100000,
+    "BINANCE:SOLUSDT": 500000,
+    "BINANCE:DOGEUSDT": 10000000,
 }
 
 MAX_FUTURE_SECONDS = 86400      # 24 giờ
