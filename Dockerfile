@@ -80,14 +80,13 @@ RUN find /opt/hadoop/etc/hadoop/ -type f -exec sed -i 's/\r$//' {} + && \
     find /opt/spark/conf/ -type f -exec sed -i 's/\r$//' {} + && \
     find /opt/hive/conf/ -type f -exec sed -i 's/\r$//' {} +
 
-# Chép các script xử lý Python vào container
-COPY --chown=dack15:dack15 *.py /home/dack15/
+# Chép mã nguồn và script vào container
+COPY --chown=dack15:dack15 src/ /home/dack15/src/
+COPY --chown=dack15:dack15 scripts/ /home/dack15/scripts/
 
-# Chép entrypoint script
-COPY --chown=dack15:dack15 entrypoint.sh /home/dack15/entrypoint.sh
-RUN sed -i 's/\r$//' /home/dack15/*.py && \
-    sed -i 's/\r$//' /home/dack15/entrypoint.sh && \
-    chmod +x /home/dack15/entrypoint.sh
+RUN find /home/dack15/src/ -name "*.py" -exec sed -i 's/\r$//' {} + && \
+    sed -i 's/\r$//' /home/dack15/scripts/entrypoint.sh && \
+    chmod +x /home/dack15/scripts/entrypoint.sh
 
 # Chạy Entrypoint
-ENTRYPOINT ["/home/dack15/entrypoint.sh"]
+ENTRYPOINT ["/home/dack15/scripts/entrypoint.sh"]
