@@ -1,4 +1,4 @@
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+﻿[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 Write-Host "==================================================================" -ForegroundColor Cyan
 Write-Host "🚀 TEST PIPELINE E2E: FINNHUB -> KAFKA -> SPARK -> HIVE -> SUPERSET" -ForegroundColor Cyan

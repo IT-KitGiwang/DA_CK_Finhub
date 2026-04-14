@@ -1,6 +1,6 @@
 services:
   master:
-    # build: .  # Tạm tắt build vì archive.apache.org đang sập - dùng image có sẵn
+    build: .
     image: hadoop-spark-jdk21:latest
     container_name: master
     hostname: master
@@ -12,11 +12,11 @@ services:
       - "8080:8080" # Spark Master Web UI
       - "19888:19888" # MapReduce JobHistory Web UI
       - "4040:4040" # Spark Application UI
-      - "10000:10000"   # ← thêm: HiveServer2
-      - "9083:9083"     # ← thêm: Hive Metastore
+      - "10000:10000"   # Spark Thrift Server (HiveServer2)
+      - "9083:9083"     # Hive Metastore
     volumes:
       - master-hdfs-data:/opt/hadoop/data
-      - ./config:/config-template # Giao diện chia sẻ cấu hình
+      - ./config:/config-template
     networks:
       - hadoop-net
 
