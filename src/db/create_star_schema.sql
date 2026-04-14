@@ -1,31 +1,27 @@
+/*
+=============================================================================
+FINHUB CRYPTO PIPELINE — REAL-TIME STAR SCHEMA (HỆ VIEW)
+=============================================================================
+Kiến trúc: Logical Data Warehouse trên Lakehouse
+  • Dim tĩnh (Physical): dim_symbol, dim_exchange  → Lưu tự nhiên trên HDFS
+  • Dim động (View):     vw_dim_date, vw_dim_time  → Tự sinh từ dữ liệu
+  • Fact (View):         vw_fact_crypto_trades     → Real-time, không tốn ổ cứng đĩa
+
+Bảng nguồn: crypto_trades (do Spark Streaming ghi liên tục)
+Database:   default (Spark Thrift Server, port 10000)
+=============================================================================
+*/
+
 -- =============================================================================
--- FINHUB CRYPTO PIPELINE — REAL-TIME STAR SCHEMA (HỆ VIEW)
--- =============================================================================
--- Kiến trúc: Logical Data Warehouse trên Lakehouse
---   • Dim tĩnh (Physical): dim_symbol, dim_exchange  → Lưu thật trên HDFS
---   • Dim động (View):     vw_dim_date, vw_dim_time  → Tự sinh từ dữ liệu
---   • Fact (View):         vw_fact_crypto_trades     → Real-time, không tốn ổ cứng
---
--- Bảng nguồn: crypto_trades (do Spark Streaming ghi liên tục)
--- Database:   default (Spark Thrift Server, port 10000)
+-- PHẦN 1: DIMENSION VẬT LÝ (PHYSICAL TABLES)
+-- Dữ liệu tĩnh, seed thủ công, lưu trên HDFS dạng Parquet
 -- =============================================================================
 
-
--- ╔═══════════════════════════════════════════════════════════════════════════╗
--- ║  PHẦN 1: DIMENSION VẬT LÝ (PHYSICAL TABLES)                            ║
--- ║  Dữ liệu tĩnh, seed thủ công, lưu trên HDFS dạng Parquet              ║
--- ╚═══════════════════════════════════════════════════════════════════════════╝
-
-
--- -----------------------------------------------------------------------------
--- DIM_EXCHANGE — Thông tin sàn giao dịch
--- Dữ liệu Master Data: hiện tại chỉ có Binance
--- Khi mở rộng thêm sàn mới (Coinbase, OKX...) → INSERT thêm dòng
--- -----------------------------------------------------------------------------
+-- DIM_EXCHANGE — Thông tin sàn giao dịch (Master Data)
 DROP TABLE IF EXISTS dim_exchange;
 
 CREATE TABLE dim_exchange (
-    exchange_key        INT         COMMENT 'Surrogate key (PK)',
+    exchange_key        INT         COMMENT 'Khóa chính (Surrogate key)',
     exchange_name       STRING      COMMENT 'Tên viết tắt: BINANCE',
     exchange_fullname   STRING      COMMENT 'Tên đầy đủ: Binance Exchange',
     country             STRING      COMMENT 'Quốc gia đăng ký',
@@ -39,15 +35,11 @@ INSERT INTO dim_exchange VALUES
     (1, 'BINANCE', 'Binance Exchange', 'Malta', 'CEX', 'USDT');
 
 
--- -----------------------------------------------------------------------------
 -- DIM_SYMBOL — Thông tin đồng tiền crypto
--- Dữ liệu Master Data: 3 đồng đang theo dõi (BTC, ETH, BNB)
--- Khi thêm đồng mới vào .env → INSERT thêm dòng tương ứng
--- -----------------------------------------------------------------------------
 DROP TABLE IF EXISTS dim_symbol;
 
 CREATE TABLE dim_symbol (
-    symbol_key          INT         COMMENT 'Surrogate key (PK)',
+    symbol_key          INT         COMMENT 'Khóa chính (Surrogate key)',
     symbol              STRING      COMMENT 'Symbol đầy đủ: BINANCE:BTCUSDT',
     symbol_code         STRING      COMMENT 'Mã giao dịch: BTCUSDT',
     base_currency       STRING      COMMENT 'Đồng gốc: BTC / ETH / BNB',
@@ -65,24 +57,18 @@ INSERT INTO dim_symbol VALUES
     (3, 'BINANCE:BNBUSDT', 'BNBUSDT', 'BNB', 'USDT', 'BNB',      'Cryptocurrency', 'Mid-cap');
 
 
--- ╔═══════════════════════════════════════════════════════════════════════════╗
--- ║  PHẦN 2: DIMENSION ĐỘNG (LOGICAL VIEWS)                                 ║
--- ║  Tự sinh từ dữ liệu trong bảng crypto_trades                           ║
--- ║  Không chiếm ổ cứng, luôn cập nhật real-time                           ║
--- ╚═══════════════════════════════════════════════════════════════════════════╝
+-- =============================================================================
+-- PHẦN 2: DIMENSION ĐỘNG (LOGICAL VIEWS)
+-- Tự sinh từ dữ liệu trong bảng crypto_trades. Cập nhật real-time.
+-- =============================================================================
 
-
--- -----------------------------------------------------------------------------
--- VW_DIM_DATE — Chiều thời gian theo NGÀY (View ảo)
--- Tự động sinh ra ngày mới khi Spark ghi dữ liệu ngày mới vào crypto_trades
--- Không cần chạy batch INSERT định kỳ
--- -----------------------------------------------------------------------------
+-- VW_DIM_DATE — Chiều thời gian theo NGÀY
 DROP VIEW IF EXISTS vw_dim_date;
 
 CREATE VIEW vw_dim_date AS
 SELECT DISTINCT
     CAST(DATE_FORMAT(time, 'yyyyMMdd') AS INT)       AS date_key,
-    CAST(time AS DATE)                                AS full_date,
+    CAST(time AS DATE)                               AS full_date,
     YEAR(time)                                        AS year,
     QUARTER(time)                                     AS quarter,
     MONTH(time)                                       AS month,
@@ -98,11 +84,7 @@ SELECT DISTINCT
 FROM crypto_trades;
 
 
--- -----------------------------------------------------------------------------
--- VW_DIM_TIME — Chiều thời gian theo GIỜ:PHÚT:GIÂY (View ảo)
--- Bao gồm phân loại buổi (Morning/Afternoon/Evening/Night)
--- và phiên giao dịch quốc tế (Asia/Europe/US) theo múi giờ UTC+7
--- -----------------------------------------------------------------------------
+-- VW_DIM_TIME — Chiều thời gian theo GIỜ:PHÚT:GIÂY
 DROP VIEW IF EXISTS vw_dim_time;
 
 CREATE VIEW vw_dim_time AS
@@ -126,55 +108,42 @@ SELECT DISTINCT
 FROM crypto_trades;
 
 
--- ╔═══════════════════════════════════════════════════════════════════════════╗
--- ║  PHẦN 3: FACT TABLE (LOGICAL VIEW)                                      ║
--- ║  Trái tim của Star Schema — View trỏ thẳng vào luồng Streaming         ║
--- ║  Real-time 100%: Mỗi lần Superset query = lấy data mới nhất            ║
--- ╚═══════════════════════════════════════════════════════════════════════════╝
+-- =============================================================================
+-- PHẦN 3: FACT TABLE (LOGICAL VIEW)
+-- Chế độ view ảo liên kết (JOIN) real-time luồng dữ liệu Streaming.
+-- =============================================================================
 
-
--- -----------------------------------------------------------------------------
--- VW_FACT_CRYPTO_TRADES — Bảng sự kiện chính (View ảo)
---
--- Mỗi dòng = 1 giao dịch crypto đã qua bước Data Cleaning trên Spark
--- View này JOIN bảng crypto_trades (đang real-time) với dim_symbol
--- để gắn symbol_key, đồng thời tính date_key, time_key, trade_value
---
--- Ưu điểm:
---   • Không chiếm thêm dung lượng HDFS (0 bytes dư thừa)
---   • Luôn phản ánh dữ liệu mới nhất (real-time)
---   • Superset query trực tiếp trên View = Star Schema chuẩn
--- -----------------------------------------------------------------------------
+-- VW_FACT_CRYPTO_TRADES — Bảng sự kiện chính mô tả các giao dịch
 DROP VIEW IF EXISTS vw_fact_crypto_trades;
 
 CREATE VIEW vw_fact_crypto_trades AS
 SELECT
-    -- ═══ Surrogate Key ═══
+    -- Surrogate Key
     ROW_NUMBER() OVER (ORDER BY t.time)                        AS trade_id,
 
-    -- ═══ Foreign Keys (liên kết tới Dimensions) ═══
+    -- Foreign Keys (Liên kết tới các Dimensions phía trên)
     CAST(DATE_FORMAT(t.time, 'yyyyMMdd') AS INT)               AS date_key,
     CAST(DATE_FORMAT(t.time, 'HHmmss')  AS INT)                AS time_key,
     ds.symbol_key                                               AS symbol_key,
     1                                                           AS exchange_key,
 
-    -- ═══ Measures (Chỉ số đo lường) ═══
+    -- Measures (Chỉ số đo lường thực tế)
     t.price                                                     AS price,
     t.volume                                                    AS volume,
     ROUND(t.price * t.volume, 6)                                AS trade_value,
 
-    -- ═══ Metadata ═══
+    -- Metadata
     t.time                                                      AS trade_time
 
 FROM crypto_trades t
 JOIN dim_symbol ds ON t.symbol = ds.symbol;
 
 
--- ╔═══════════════════════════════════════════════════════════════════════════╗
--- ║  PHẦN 4: KIỂM TRA DỮ LIỆU (VALIDATION)                                ║
--- ╚═══════════════════════════════════════════════════════════════════════════╝
+-- =============================================================================
+-- PHẦN 4: KIỂM TRA DỮ LIỆU (VALIDATION QUERIES)
+-- =============================================================================
 
--- 4.1: Đếm số dòng trong từng bảng/view
+-- 4.1: Đếm số lượng bản ghi tương đối trong từng thành phần Schema
 SELECT 'dim_exchange (Physical)'         AS object_name, COUNT(*) AS rows FROM dim_exchange
 UNION ALL
 SELECT 'dim_symbol (Physical)'           AS object_name, COUNT(*) AS rows FROM dim_symbol
@@ -186,7 +155,7 @@ UNION ALL
 SELECT 'vw_fact_crypto_trades (View)'    AS object_name, COUNT(*) AS rows FROM vw_fact_crypto_trades;
 
 
--- 4.2: Xem dữ liệu mẫu trong Fact View (kèm join đầy đủ Star Schema)
+-- 4.2: Truy vấn dữ liệu mẫu của luồng Fact (từ các JOIN view vệ tinh)
 SELECT
     f.trade_id,
     f.trade_time,
@@ -211,16 +180,11 @@ ORDER BY f.trade_time DESC
 LIMIT 20;
 
 
--- ╔═══════════════════════════════════════════════════════════════════════════╗
--- ║  PHẦN 5: CÁC QUERY PHÂN TÍCH CHO SUPERSET DASHBOARD                    ║
--- ║  Copy trực tiếp vào SQL Lab của Superset để tạo Dataset / Chart         ║
--- ╚═══════════════════════════════════════════════════════════════════════════╝
+-- =============================================================================
+-- PHẦN 5: CÁC QUERY PHÂN TÍCH CHO DASHBOARD (TÍCH HỢP SUPERSET)
+-- =============================================================================
 
-
--- ─────────────────────────────────────────────────────────────────────────────
--- CHART 1: Line Chart — Giá trung bình theo giờ từng đồng tiền
--- Dùng cho: Time-series line chart trong Superset
--- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 1: Biểu đồ đường (Line Chart) — Giá trung bình theo giờ từng đồng tiền
 SELECT
     dd.full_date,
     dt.hour,
@@ -237,10 +201,7 @@ GROUP BY dd.full_date, dt.hour, ds.asset_name
 ORDER BY dd.full_date, dt.hour;
 
 
--- ─────────────────────────────────────────────────────────────────────────────
--- CHART 2: Bar Chart — Volume theo phiên giao dịch (Asia/Europe/US)
--- Dùng cho: Grouped bar chart so sánh khối lượng
--- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 2: Biểu đồ cột (Bar Chart) — Khối lượng theo phiên giao dịch (Asia/Europe/US)
 SELECT
     dt.trading_session,
     ds.asset_name,
@@ -254,14 +215,11 @@ GROUP BY dt.trading_session, ds.asset_name
 ORDER BY total_usd_value DESC;
 
 
--- ─────────────────────────────────────────────────────────────────────────────
--- CHART 3: Pie Chart — Tỷ trọng giao dịch theo đồng tiền
--- Dùng cho: Donut/Pie chart phân bổ portfolio
--- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 3: Biểu đồ tròn (Pie Chart) — Tỷ trọng giao dịch theo đồng tiền
 SELECT
     ds.asset_name,
     ds.market_cap_tier,
-    COUNT(*)                          AS so_giao_dich,
+    COUNT(*)                         AS so_giao_dich,
     ROUND(SUM(f.trade_value), 2)     AS tong_gia_tri_usd,
     ROUND(SUM(f.volume), 4)          AS tong_volume
 FROM vw_fact_crypto_trades f
@@ -269,10 +227,7 @@ JOIN dim_symbol ds ON f.symbol_key = ds.symbol_key
 GROUP BY ds.asset_name, ds.market_cap_tier;
 
 
--- ─────────────────────────────────────────────────────────────────────────────
--- CHART 4: Big Number — Giá mới nhất từng đồng (Real-time indicator)
--- Dùng cho: Big Number card trên đầu Dashboard
--- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 4: Số liệu tổng quan (Big Number/Indicator) — Giá mới nhất từng đồng
 SELECT
     ds.asset_name,
     ds.base_currency,
@@ -289,10 +244,7 @@ WHERE f.trade_time = (
 );
 
 
--- ─────────────────────────────────────────────────────────────────────────────
--- CHART 5: Table — Top giao dịch có giá trị lớn nhất (Whale Alert)
--- Dùng cho: Data table sắp xếp theo trade_value giảm dần
--- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 5: Bảng thống kê (Table) — Top các giao dịch có giá trị lớn nhất (Whale Alert)
 SELECT
     f.trade_time,
     ds.asset_name,
@@ -304,19 +256,16 @@ SELECT
 FROM vw_fact_crypto_trades f
 JOIN dim_symbol    ds ON f.symbol_key   = ds.symbol_key
 JOIN dim_exchange  de ON f.exchange_key = de.exchange_key
-JOIN vw_dim_time   dt ON f.time_key    = dt.time_key
+JOIN vw_dim_time   dt ON f.time_key     = dt.time_key
 ORDER BY f.trade_value DESC
 LIMIT 50;
 
 
--- ─────────────────────────────────────────────────────────────────────────────
--- CHART 6: Heatmap — Phân bố giao dịch theo Giờ × Ngày trong tuần
--- Dùng cho: Calendar heatmap trong Superset
--- ─────────────────────────────────────────────────────────────────────────────
+-- CHART 6: Bản đồ nhiệt (Heatmap) — Phân bố giao dịch theo Giờ × Ngày trong tuần
 SELECT
     dd.day_name,
     dt.hour,
-    COUNT(*)                         AS trade_count,
+    COUNT(*)                        AS trade_count,
     ROUND(AVG(f.price), 2)          AS avg_price,
     ROUND(SUM(f.trade_value), 2)    AS total_value
 FROM vw_fact_crypto_trades f
