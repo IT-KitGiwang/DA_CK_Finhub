@@ -5,6 +5,7 @@ Luồng dữ liệu (Pipeline): Finnhub WebSocket → Kafka → [SPARK LÀM SẠ
 Phân lớp (Layer):    Lớp Đồng (Raw Kafka) → Lớp Bạc (Cleaned) → Bảng Hive (crypto_trades)
 """
 
+import os
 import logging
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import (
@@ -20,14 +21,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Các Hằng Số và Cấu Hình Cơ Bản
-VALID_SYMBOLS = [
-    "BINANCE:BTCUSDT",
-    "BINANCE:ETHUSDT",
-    "BINANCE:BNBUSDT",
-    "BINANCE:SOLUSDT",
-    "BINANCE:DOGEUSDT"
-]
+def load_dotenv_file(path: str = ".env") -> None:
+    """Đọc file .env để đồng bộ biến môi trường (Single Source of Truth)."""
+    if not os.path.exists(path):
+        logger.warning(f"Không tìm thấy file {path}. Sử dụng biến môi trường mặc định.")
+        return
+    with open(path, "r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip())
+
+# Khởi tạo ngay lập tức lúc file được nạp
+load_dotenv_file()
+
+# Kéo danh sách mã Token từ NGUỒN CHÂN LÝ DUY NHẤT thay vì viết chết (hardcode)
+raw_symbols = os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT")
+VALID_SYMBOLS = [sym.strip() for sym in raw_symbols.split(",") if sym.strip()]
 
 MAX_FUTURE_SECONDS = 86400      # 24 giờ
 MAX_PAST_SECONDS   = 2592000    # 30 ngày
