@@ -29,11 +29,11 @@ if (-not $port10000Open) {
 }
 
 Write-Host "`n[3/6] 📡 Bật Producer (Thu thập data từ Finnhub) trong cửa sổ mới..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "python producer.py"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "python src/kafka/producer.py"
 Write-Host "✅ Đã chạy producer.py ở cửa sổ mới (Đang gửi dữ liệu vào Kafka)." -ForegroundColor Green
 
 Write-Host "`n[4/6] ⚡ Bật Spark Streaming Processor trong cửa sổ mới..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "docker exec -it master spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.0 /home/dack15/spark_processor.py"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "docker exec -it master spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.0 /home/dack15/src/spark/spark_processor.py"
 Write-Host "✅ Đã chạy spark_processor.py ở cửa sổ mới (Đang đọc Kafka -> ghi Hive)." -ForegroundColor Green
 
 Write-Host "`n[5/6] ⏳ Chờ 30 giây để Spark gom micro-batch và ghi file Parquet xuống HDFS/Hive..." -ForegroundColor Yellow
@@ -45,7 +45,7 @@ Write-Host "`n✅ Đã qua 30 giây." -ForegroundColor Green
 
 Write-Host "`n[6/6] 🔍 Kiểm tra dữ liệu được ghi vào Hive bằng Beeline (truy vấn qua Thrift Server)..." -ForegroundColor Yellow
 Write-Host "Chạy: SELECT * FROM crypto_trades LIMIT 5;" -ForegroundColor DarkGray
-docker exec master bash -c "beeline -u jdbc:hive2://localhost:10000 -n dack15 -e 'SELECT * FROM crypto_trades LIMIT 5;'"
+docker exec master bash -c "beeline -u 'jdbc:hive2://localhost:10000/default;auth=noSasl' -n dack15 -e 'SELECT * FROM crypto_trades LIMIT 5;'"
 
 Write-Host "`n==================================================================" -ForegroundColor Cyan
 Write-Host "🎉 HOÀN THÀNH TEST LUỒNG HỆ THỐNG!" -ForegroundColor Green
