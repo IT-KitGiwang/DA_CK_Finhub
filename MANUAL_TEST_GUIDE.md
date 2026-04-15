@@ -158,5 +158,7 @@ C. Kiểm tra Log (Xem bên trong đang nói gì)
 Nếu dashboard không nhảy số, hãy xem Kafka/Spark đang la hét gì bằng lệnh:
 
 # Lệnh chạy Dagster
-python -m dagster dev -f src/dagster_pipeline.py
+python -m dagster dev -f src/dagster/dagster_pipeline.py
 taskkill /F /IM python.exe
+
+# lí do sử dụng lệnh: docker exec master bash -c "/opt/spark/sbin/stop-thriftserver.sh || true để xóa trước khi khởi động lại thrift server
