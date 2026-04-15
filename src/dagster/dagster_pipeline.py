@@ -1,8 +1,56 @@
 import subprocess
 import time
-from dagster import op, job, get_dagster_logger
+from dagster import op, job, get_dagster_logger, success_hook, failure_hook, HookContext
+import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 logger = get_dagster_logger()
+
+# ----------------------------------------------------
+# KHUNG TRỤC GỬI EMAIL THÔNG BÁO (ALERTS)
+# ----------------------------------------------------
+def send_gmail_alert(subject: str, body: str):
+    sender_email = os.getenv("SMTP_EMAIL")
+    sender_password = os.getenv("SMTP_PASSWORD")
+    receiver_email = os.getenv("ALERT_RECEIVER", sender_email)
+    
+    if not sender_email or not sender_password:
+        logger.warning("Chưa cấu hình tài khoản Email trong file .env, nên không thể gửi mail (Nhưng Ops vẫn chạy).")
+        return
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = receiver_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'html'))
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
+        logger.info(f"📧 Đã bắn Email thành công: {subject}")
+    except Exception as e:
+        logger.error(f"❌ Lỗi khi bắn Email: {e}")
+
+@success_hook
+def email_on_success(context: HookContext):
+    op_name = context.op.name
+    subject = f"✅ [DAGSTER THÀNH CÔNG] Nhiệm vụ '{op_name}' đã hoàn tất!"
+    body = f"<h3>Xin chào Data Engineer,</h3><p>Khối công việc <b>{op_name}</b> vừa chạy trót lọt và an toàn 100%.</p>"
+    send_gmail_alert(subject, body)
+
+@failure_hook
+def email_on_failure(context: HookContext):
+    op_name = context.op.name
+    error_msg = str(context.op_exception)
+    subject = f"🚨 [DAGSTER BÁO LỖI KHẨN] Khối '{op_name}' SỤP ĐỔ!"
+    body = f"<h3>🚨 Báo Động Đỏ Hệ Thống Data!</h3><p>Hệ thống vừa sụp đổ tại chốt chặn: <b>{op_name}</b></p><br><b>💡 Nguyên nhân (StackTrace):</b><br><pre>{error_msg}</pre><br><p>Yêu cầu Engineer vào kiểm tra ngay lập tức!</p>"
+    send_gmail_alert(subject, body)
+# ----------------------------------------------------
 
 def run_cmd(command: str):
     """Hàm chạy shell command."""
@@ -74,7 +122,7 @@ def start_realtime_streams(load_dimension_tables, config_superset):
     subprocess.Popen(spark_submit_cmd, shell=True)
     logger.info("HỆ THỐNG ĐÃ BAY LÊN CLOUD REAL-TIME! XONG! 🚀")
 
-@job
+@job(hooks={email_on_success, email_on_failure})
 def finhub_realtime_setup_pipeline():
     """Đường ống Khởi tạo Data Warehouse chuẩn Lambda Architecture"""
     # Khai báo sự phụ thuộc (Dependency Graph)
