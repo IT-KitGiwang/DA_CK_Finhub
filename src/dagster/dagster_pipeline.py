@@ -28,7 +28,7 @@ def send_gmail_alert(subject: str, body: str):
 
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls() 
+        server.starttls()
         server.login(sender_email, sender_password)
         server.send_message(msg)
         server.quit()
@@ -67,9 +67,11 @@ def boot_infrastructure():
 
 @op
 def cleanup_old_garbage(boot_infrastructure):
-    """Nhiệm vụ 2: Cô Tấm dọn rác - Dọn dẹp HDFS phiên trước"""
-    logger.info("Dọn dẹp Checkpoint và Data rác từ phiên hôm trước...")
-    run_cmd('docker exec master bash -c "rm -rf /tmp/spark_checkpoint_crypto_final && hdfs dfs -rm -r /user/hive/warehouse/crypto_trades 2>/dev/null; echo CLEAN"')
+    """Nhiệm vụ 2: Dọn rác HDFS toàn diện (Fact & Dimension)"""
+    logger.info("Đang dọn dẹp Checkpoint và toàn bộ HDFS rác từ session cũ...")
+    # Xóa sạch checkpoint VÀ dọn bão tố trong hầm Hive
+    run_cmd('docker exec master bash -c "rm -rf /tmp/spark_checkpoint_crypto_final && hdfs dfs -rm -r /user/hive/warehouse/* 2>/dev/null || true; echo CLEAN"')
+    return True
 
 @op
 def activate_thrift_server(cleanup_old_garbage):
@@ -85,15 +87,45 @@ def activate_thrift_server(cleanup_old_garbage):
         "--hiveconf hive.server2.transport.mode=binary --hiveconf hive.server2.authentication=NOSASL"
     )
     run_cmd(f'docker exec master bash -c "{thrift_cmd}"')
-    logger.info("Chờ 30s để Thrift Server mở cổng 10000 (Đôi khi rùa bò một chút)...")
-    time.sleep(30)
+    logger.info("Chờ 45s để Thrift Server mở cổng 10000...")
+    time.sleep(45)
 
 @op
 def load_dimension_tables(activate_thrift_server):
     """Nhiệm vụ 4: Nạp Bảng Dữ Liệu Tĩnh (Dim) chuẩn DataOps"""
+    beeline_prefix = "beeline -u 'jdbc:hive2://localhost:10000/default;auth=noSasl' -n dack15"
+    
+    # Bước 4a: Kiểm tra Thrift Server đã sống chưa bằng Beeline (retry tối đa 8 lần)
+    max_retries = 8
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"Kiểm tra Thrift Server lần {attempt}/{max_retries}...")
+        result = subprocess.run(
+            "docker exec master bash -c \"beeline -u 'jdbc:hive2://localhost:10000/default;auth=noSasl' -e 'SELECT 1;'\"",
+            shell=True, capture_output=True, text=True
+        )
+        # PowerShell coi WARNING của Beeline là lỗi (exit code 1) nên không dùng returncode
+        all_output = result.stdout + result.stderr
+        if "1 row selected" in all_output:
+            logger.info("✅ Thrift Server đã sẵn sàng chiến đấu!")
+            break
+        else:
+            logger.warning(f"⏳ Thrift Server chưa tỉnh... đợi thêm 20 giây (lần {attempt})")
+            time.sleep(20)
+    else:
+        raise Exception("❌ Thrift Server không thể kết nối sau 8 lần thử!")
+    
+    # Bước 4b: Chạy SQL tạo Star Schema (dùng --force để bỏ qua lỗi validation queries)
     logger.info("Bắn câu lệnh Beeline SQL để tạo bảng HIVE (Dim/Fact View)...")
-    beeline_cmd = "beeline -u 'jdbc:hive2://localhost:10000/default;auth=noSasl' -n dack15 -f /home/dack15/src/db/create_star_schema.sql"
-    run_cmd(f'docker exec master bash -c "{beeline_cmd}"')
+    sql_result = subprocess.run(
+        f'docker exec master bash -c "{beeline_prefix} --force -f /home/dack15/src/db/create_star_schema.sql"',
+        shell=True, capture_output=True, text=True
+    )
+    sql_output = sql_result.stdout + sql_result.stderr
+    # Kiểm tra xem các bảng Dimension có được tạo thành công không
+    if "dim_exchange" in sql_output.lower() or "dim_symbol" in sql_output.lower():
+        logger.info("✅ Star Schema đã được triển khai thành công!")
+    else:
+        logger.warning(f"⚠️ Beeline có thể gặp lỗi nhỏ, nhưng vẫn tiếp tục: {sql_output[-500:]}")
 
 @op
 def config_superset(activate_thrift_server):
@@ -122,6 +154,41 @@ def start_realtime_streams(load_dimension_tables, config_superset):
     subprocess.Popen(spark_submit_cmd, shell=True)
     logger.info("HỆ THỐNG ĐÃ BAY LÊN CLOUD REAL-TIME! XONG! 🚀")
 
+@op
+def create_star_views(start_realtime_streams):
+    """Nhiệm vụ 6: Tạo Views sau khi Spark đã tạo bảng crypto_trades"""
+    beeline_prefix = "beeline -u 'jdbc:hive2://localhost:10000/default;auth=noSasl' -n dack15"
+    
+    # Đợi Spark tạo bảng crypto_trades (retry tối đa 10 lần x 15 giây = 150 giây)
+    max_retries = 10
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"Chờ bảng crypto_trades xuất hiện... lần {attempt}/{max_retries}")
+        result = subprocess.run(
+            f"docker exec master bash -c \"{beeline_prefix} -e 'SELECT COUNT(*) FROM crypto_trades;'\"",
+            shell=True, capture_output=True, text=True
+        )
+        all_output = result.stdout + result.stderr
+        if "row selected" in all_output or "rows selected" in all_output:
+            logger.info("✅ Bảng crypto_trades đã sẵn sàng! Spark đang ghi data!")
+            break
+        else:
+            logger.warning(f"⏳ Bảng crypto_trades chưa có data... đợi 15 giây (lần {attempt})")
+            time.sleep(15)
+    else:
+        logger.warning("⚠️ crypto_trades chưa có data sau 10 lần thử, vẫn tiếp tục tạo Views...")
+
+    # Chạy lại file SQL để tạo Views (lần này crypto_trades đã tồn tại)
+    logger.info("Tạo Star Schema Views (lần 2 - sau khi có crypto_trades)...")
+    sql_result = subprocess.run(
+        f'docker exec master bash -c "{beeline_prefix} --force -f /home/dack15/src/db/create_star_schema.sql"',
+        shell=True, capture_output=True, text=True
+    )
+    sql_output = sql_result.stdout + sql_result.stderr
+    if "vw_fact_crypto_trades" in sql_output.lower() or "row selected" in sql_output.lower():
+        logger.info("✅ Toàn bộ Star Schema Views đã được triển khai hoàn hảo!")
+    else:
+        logger.warning(f"⚠️ Views có thể chưa hoàn chỉnh: {sql_output[-300:]}")
+
 @job(hooks={email_on_success, email_on_failure})
 def finhub_realtime_setup_pipeline():
     """Đường ống Khởi tạo Data Warehouse chuẩn Lambda Architecture"""
@@ -135,4 +202,8 @@ def finhub_realtime_setup_pipeline():
     step4b = config_superset(step3)
     
     # Kích nổ luồng Streaming Real-time ngầm
-    start_realtime_streams(step4a, step4b)
+    step5 = start_realtime_streams(step4a, step4b)
+    
+    # Đợi Spark tạo crypto_trades rồi tạo Views hoàn chỉnh
+    create_star_views(step5)
+

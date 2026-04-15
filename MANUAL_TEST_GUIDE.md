@@ -88,7 +88,11 @@ Kết quả sẽ là luồng dữ liệu thời gian thực được xử lý s�
 All container: docker ps -a
 docker exec -it master bash
 Kiêm tra file panquet lưu trữ: hdfs dfs -ls /user/hive/warehouse (nằm ở host 9000)
--> spark-sql -> SELECT * FROM crypto_trades LIMIT 10;
+chạy lệnh này: 
+
+spark-sql --conf spark.sql.hive.metastore.version=4.0.0 --conf spark.sql.hive.metastore.jars.path="file:///opt/hive/lib/*" --hiveconf hive.metastore.uris=thrift://master:9083
+
+--> SELECT * FROM crypto_trades LIMIT 10;
 check xem hive metastore có đang chạy chưa: 
 -> netstat -tulnp | grep 9083 (9083 dùng để spark, hive -> hive metastore (biết được metadata, dữ liệu dạng gì, lưu ở đâu))
 -> jps
@@ -162,3 +166,9 @@ python -m dagster dev -f src/dagster/dagster_pipeline.py
 taskkill /F /IM python.exe
 
 # lí do sử dụng lệnh: docker exec master bash -c "/opt/spark/sbin/stop-thriftserver.sh || true để xóa trước khi khởi động lại thrift server
+-> vì lần đầu nếu chạy thì sẽ có cổng 10000 thì nó sẽ không mở được cổng 10000 mới toanh khi chạy lần 2.
+
+# Mẹo khi docker treo (không khởi động được cổng 10000)
+chạy lại: 
+docker-compose down
+docker-compose up -d
