@@ -10,7 +10,8 @@ import logging
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import (
     from_json, col, to_timestamp, trim, upper,
-    current_timestamp, unix_timestamp, lit
+    current_timestamp, unix_timestamp, lit,
+    year, month, dayofmonth
 )
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
@@ -70,11 +71,11 @@ def clean_data(raw_df: DataFrame) -> DataFrame:
         (record_time >= current_time - MAX_PAST_SECONDS)
     )
 
-    # 6. Khử trùng lặp (Deduplication): Loại bỏ bản ghi có thể bị gởi đúp từ cơ chế at-least-once của Kafka
-    step6_df = step5_df.dropDuplicates(["time", "symbol", "price", "volume"])
+    # ĐÃ BỎ BƯỚC 6: Không Khử trùng lặp (Deduplication) để tránh xóa nhầm các giao dịch độc lập khớp cùng mili-giây (Iceberg Order/Bot Slicing).
+    # Deduplication thực sự (nếu cần bắt buộc rà trùng ID message) sẽ được xử lý ở tầng View phân tích của Data Warehouse.
 
-    logger.info("Hoàn tất tiến trình xử lý Data Cleaning hợp lý (6 bước bảo vệ cốt lõi).")
-    return step6_df
+    logger.info("Hoàn tất tiến trình xử lý Data Cleaning hợp lý (Bảo vệ cốt lõi 5 bước, mở khóa 100% lưu lượng Tick Data).")
+    return step5_df
 
 
 def main() -> None:
@@ -115,7 +116,10 @@ def main() -> None:
     parsed_df = raw_df.selectExpr("CAST(value AS STRING)") \
         .select(from_json(col("value"), schema).alias("data")) \
         .select("data.*") \
-        .withColumn("time", to_timestamp(col("time")))
+        .withColumn("time", to_timestamp(col("time"))) \
+        .withColumn("year", year(col("time"))) \
+        .withColumn("month", month(col("time"))) \
+        .withColumn("day", dayofmonth(col("time")))
 
     logger.info("Thực thi cơ chế làm sạch Dữ Liệu 6 Bước Đạt Chuẩn (Chuyển Hóa Bronze -> Silver)...")
     cleaned_df = clean_data(parsed_df)
@@ -123,6 +127,7 @@ def main() -> None:
     logger.info("Bắt đầu ghi phân mảnh luồng dữ liệu sạch trực tiếp tới Hệ Thống Hive 'crypto_trades'...")
     query = cleaned_df.writeStream \
         .outputMode("append") \
+        .partitionBy("year", "month", "day") \
         .option("checkpointLocation", "/tmp/spark_checkpoint_crypto_final") \
         .toTable("crypto_trades")
 

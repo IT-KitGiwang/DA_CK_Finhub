@@ -11,10 +11,46 @@ Mô tả:
 import os
 import logging
 import sys
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, to_timestamp, year, month, dayofmonth
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql.functions import (
+    from_json, col, to_timestamp, year, month, dayofmonth,
+    trim, upper, unix_timestamp, current_timestamp, lit
+)
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 from pyspark.sql.utils import AnalysisException
+
+MAX_FUTURE_SECONDS = 86400      # 24 giờ
+MAX_PAST_SECONDS   = 2592000    # 30 ngày
+
+def clean_data(raw_df: DataFrame, valid_symbols: list) -> DataFrame:
+    """
+    Áp dụng quy trình kỹ thuật làm sạch dữ liệu 6 bước lên DataFrame thô.
+    """
+    # 1. Loại bỏ Null: Xóa các dòng bị khuyết các trường quan trọng (Sự cố bắt packet)
+    step1_df = raw_df.dropna(how="any", subset=["time", "symbol", "price", "volume"])
+
+    # 2. Chuẩn hóa chuỗi: Cắt bỏ khoảng trắng dư thừa và in hoa tên token nhằm tránh lỗi định dạng
+    step2_df = step1_df.withColumn("symbol", upper(trim(col("symbol"))))
+
+    # 3. Lọc danh sách trắng (Whitelist): Chỉ xử lý các coin có trong danh mục đang theo dõi
+    step3_df = step2_df.filter(col("symbol").isin(valid_symbols))
+
+    # 4. Xác thực Hợp lý Về Mặt Toán Học (Không hardcode ngưỡng):
+    step4_df = step3_df.filter((col("price") > 0) & (col("volume") > 0))
+
+    # 5. Xác thực Thời Gian (Timestamp): Khử các gói tin từ tương lai quá xa hoặc quá khứ xa do lệch kim đồng hồ
+    current_time = unix_timestamp(current_timestamp())
+    record_time = unix_timestamp(col("timestamp")) # Bản GCP dùng cột timestamp
+    step5_df = step4_df.filter(
+        (record_time <= current_time + MAX_FUTURE_SECONDS) &
+        (record_time >= current_time - MAX_PAST_SECONDS)
+    )
+
+    # 6. Khử trùng lặp (Deduplication): Loại bỏ bản ghi có thể bị gởi đúp từ cơ chế at-least-once của Kafka
+    step6_df = step5_df.dropDuplicates(["timestamp", "symbol", "price", "volume"])
+
+    logger.info("Hoàn tất tiến trình xử lý Data Cleaning hợp lý (6 bước bảo vệ cốt lõi).")
+    return step6_df
 
 # 1. Cấu hình Logging đầy đủ theo luật Rule Code
 logging.basicConfig(
@@ -59,6 +95,10 @@ def main() -> None:
         # Bước 2: Lấy các cấu hình từ System Environment (đã nạp từ .env)
         logger.info("Bắt đầu trích xuất các khoá cấu hình GCP từ biến môi trường...")
         
+        # Đồng bộ .env: Single Source of Truth cho các token hợp lệ
+        raw_symbols = os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT")
+        valid_symbols = [sym.strip() for sym in raw_symbols.split(",") if sym.strip()]
+
         kafka_broker = os.getenv("KAFKA_BROKER")
         kafka_topic = os.getenv("KAFKA_TOPIC")
         gcp_project = os.getenv("GCP_PROJECT_ID")
@@ -116,9 +156,13 @@ def main() -> None:
             
         logger.info("Đã thiết lập xong luồng chuyển đổi Transformation.")
 
+        # Gọi hàm làm sạch 6 bước chuẩn (Sạch rác, khử trùng, giới hạn 24h)
+        logger.info("Thực thi cơ chế làm sạch Dữ Liệu 6 Bước Đạt Chuẩn (Chuyển Hóa Bronze -> Silver)...")
+        cleaned_df = clean_data(parsed_df, valid_symbols)
+
         # Bước 6: Mở luồng Output Sink thứ 1 đẩy lên GCS (Data Lake)
         logger.info(f"Kích hoạt nhánh ghi dữ liệu Parquet lên Google Cloud Storage (GCS): gs://{gcs_bucket}/clean_data/")
-        gcs_query = parsed_df.writeStream \
+        gcs_query = cleaned_df.writeStream \
             .outputMode("append") \
             .format("parquet") \
             .option("path", f"gs://{gcs_bucket}/clean_data/") \
@@ -129,7 +173,7 @@ def main() -> None:
 
         # Bước 7: Mở luồng Output Sink thứ 2 đẩy lên BigQuery (Data Warehouse)
         logger.info(f"Kích hoạt nhánh ghi dữ liệu lên BigQuery Table: {bq_table}")
-        bq_query = parsed_df.writeStream \
+        bq_query = cleaned_df.writeStream \
             .format("bigquery") \
             .option("table", bq_table) \
             .option("checkpointLocation", "/tmp/spark_bq_checkpoint") \
