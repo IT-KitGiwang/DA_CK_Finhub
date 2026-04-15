@@ -30,3 +30,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Dagster Tmp Files
+*.db
+*.out
+*.err
+*.complete
+.tmp_dagster*
