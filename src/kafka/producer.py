@@ -40,7 +40,7 @@ class FinnhubCryptoProducer:
         self.kafka_broker: str = os.getenv("KAFKA_BROKER", "localhost:9094")
         self.kafka_topic: str = os.getenv("KAFKA_TOPIC", "crypto_trades")
         
-        raw_symbols = os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT,BINANCE:SOLUSDT,BINANCE:DOGEUSDT")
+        raw_symbols = os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT,BINANCE:SOLUSDT")
         self.symbols: List[str] = [sym.strip() for sym in raw_symbols.split(",") if sym.strip()]
         
         self.scrape_interval: float = float(os.getenv("SCRAPE_INTERVAL", "1.0"))
