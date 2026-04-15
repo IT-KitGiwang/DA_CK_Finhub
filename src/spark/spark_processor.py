@@ -39,7 +39,7 @@ def load_dotenv_file(path: str = ".env") -> None:
 load_dotenv_file()
 
 # Kéo danh sách mã Token từ NGUỒN CHÂN LÝ DUY NHẤT thay vì viết chết (hardcode)
-raw_symbols = os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT")
+raw_symbols = os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT,BINANCE:SOLUSDT,BINANCE:DOGEUSDT")
 VALID_SYMBOLS = [sym.strip() for sym in raw_symbols.split(",") if sym.strip()]
 
 MAX_FUTURE_SECONDS = 86400      # 24 giờ
