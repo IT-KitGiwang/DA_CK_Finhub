@@ -78,11 +78,7 @@ SELECT DISTINCT
     WEEKOFYEAR(time)                                  AS week_of_year,
     DAY(time)                                         AS day_of_month,
     DAYOFWEEK(time)                                   AS day_of_week,
-    DATE_FORMAT(time, 'EEEE')                         AS day_name,
-    CASE
-        WHEN DAYOFWEEK(time) IN (1, 7) THEN TRUE
-        ELSE FALSE
-    END                                               AS is_weekend
+    DATE_FORMAT(time, 'EEEE')                         AS day_name
 FROM crypto_trades;
 
 
@@ -94,19 +90,7 @@ SELECT DISTINCT
     CAST(DATE_FORMAT(time, 'HHmmss') AS INT)          AS time_key,
     HOUR(time)                                        AS hour,
     MINUTE(time)                                      AS minute,
-    SECOND(time)                                      AS second,
-    CASE
-        WHEN HOUR(time) BETWEEN  6 AND 11 THEN 'Morning'
-        WHEN HOUR(time) BETWEEN 12 AND 17 THEN 'Afternoon'
-        WHEN HOUR(time) BETWEEN 18 AND 21 THEN 'Evening'
-        ELSE                                    'Night'
-    END                                               AS period,
-    CASE
-        WHEN HOUR(time) BETWEEN  1 AND  9 THEN 'Asia'
-        WHEN HOUR(time) BETWEEN 14 AND 21 THEN 'Europe'
-        WHEN HOUR(time) >= 20 OR HOUR(time) <= 4 THEN 'US'
-        ELSE                                         'Off-hours'
-    END                                               AS trading_session
+    SECOND(time)                                      AS second
 FROM crypto_trades;
 
 
@@ -142,6 +126,61 @@ JOIN dim_symbol ds ON t.symbol = ds.symbol;
 
 
 -- =============================================================================
+-- VW_FACT_HOURLY_SUMMARY — Bảng Fact Thống Kê (Aggregate Fact Table)
+-- Gộp số liệu giao dịch của từng loại Coin theo Từng Giờ (Periodic Snapshot).
+-- Phục vụ riêng cho các Biểu đồ tổng quan rọi từ trên cao (tối ưu tốc độ BI).
+-- =============================================================================
+DROP VIEW IF EXISTS vw_fact_hourly_summary;
+
+CREATE VIEW vw_fact_hourly_summary AS
+SELECT 
+    f.date_key,
+    dt.hour,
+    f.symbol_key,
+    ds.asset_name,
+    COUNT(f.trade_id)             AS total_trades_count,
+    ROUND(SUM(f.volume), 4)       AS total_hourly_volume,
+    ROUND(SUM(f.trade_value), 2)  AS total_hourly_value_usd,
+    ROUND(MAX(f.price), 2)        AS high_price,
+    ROUND(MIN(f.price), 2)        AS low_price,
+    ROUND(AVG(f.price), 2)        AS avg_price
+FROM vw_fact_crypto_trades f
+JOIN vw_dim_time dt ON f.time_key = dt.time_key
+JOIN dim_symbol ds ON f.symbol_key = ds.symbol_key
+GROUP BY 
+    f.date_key, 
+    dt.hour, 
+    f.symbol_key, 
+    ds.asset_name;
+
+-- =============================================================================
+-- VW_FACT_DAILY_SUMMARY — Bảng Fact Thống Kê Theo Ngày (Daily Aggregate Fact)
+-- Gộp số liệu giao dịch theo Ngày. Bổ sung thêm biến động giá (Volatility).
+-- Phục vụ cho các báo cáo Trend / Biến động ngày dài hạn.
+-- =============================================================================
+DROP VIEW IF EXISTS vw_fact_daily_summary;
+
+CREATE VIEW vw_fact_daily_summary AS
+SELECT 
+    f.date_key,
+    f.symbol_key,
+    ds.asset_name,
+    COUNT(f.trade_id)             AS total_trades_count,
+    ROUND(SUM(f.volume), 4)       AS total_daily_volume,
+    ROUND(SUM(f.trade_value), 2)  AS total_daily_value_usd,
+    ROUND(MAX(f.price), 2)        AS high_price,
+    ROUND(MIN(f.price), 2)        AS low_price,
+    ROUND(AVG(f.price), 2)        AS avg_price,
+    -- Độ dao động giá trong ngày (%) = (High - Low) / Low * 100
+    ROUND(((MAX(f.price) - MIN(f.price)) / MIN(f.price)) * 100, 2) AS price_volatility_pct
+FROM vw_fact_crypto_trades f
+JOIN dim_symbol ds ON f.symbol_key = ds.symbol_key
+GROUP BY 
+    f.date_key, 
+    f.symbol_key, 
+    ds.asset_name;
+
+-- =============================================================================
 -- PHẦN 4: KIỂM TRA DỮ LIỆU (VALIDATION QUERIES)
 -- =============================================================================
 
@@ -154,7 +193,11 @@ SELECT 'vw_dim_date (View)'              AS object_name, COUNT(*) AS rows FROM v
 UNION ALL
 SELECT 'vw_dim_time (View)'              AS object_name, COUNT(*) AS rows FROM vw_dim_time
 UNION ALL
-SELECT 'vw_fact_crypto_trades (View)'    AS object_name, COUNT(*) AS rows FROM vw_fact_crypto_trades;
+SELECT 'vw_fact_crypto_trades (View)'    AS object_name, COUNT(*) AS rows FROM vw_fact_crypto_trades
+UNION ALL
+SELECT 'vw_fact_hourly_summary (View)'   AS object_name, COUNT(*) AS rows FROM vw_fact_hourly_summary
+UNION ALL
+SELECT 'vw_fact_daily_summary (View)'    AS object_name, COUNT(*) AS rows FROM vw_fact_daily_summary;
 
 
 -- 4.2: Truy vấn dữ liệu mẫu của luồng Fact (từ các JOIN view vệ tinh)
@@ -165,7 +208,6 @@ SELECT
     dd.day_name,
     dt.hour,
     dt.minute,
-    dt.trading_session,
     ds.asset_name,
     ds.base_currency,
     ds.market_cap_tier,
@@ -187,34 +229,30 @@ LIMIT 20;
 -- =============================================================================
 
 -- CHART 1: Biểu đồ đường (Line Chart) — Giá trung bình theo giờ từng đồng tiền
+-- Đã TỐI ƯU: Đọc TRỰC TIẾP từ Aggregate Fact `vw_fact_hourly_summary` thay vì tự cộng dồn Line-item.
 SELECT
     dd.full_date,
-    dt.hour,
-    ds.asset_name,
-    ROUND(AVG(f.price), 2)       AS avg_price,
-    ROUND(MAX(f.price), 2)       AS high_price,
-    ROUND(MIN(f.price), 2)       AS low_price,
-    COUNT(*)                     AS trade_count
-FROM vw_fact_crypto_trades f
-JOIN vw_dim_date   dd ON f.date_key   = dd.date_key
-JOIN vw_dim_time   dt ON f.time_key   = dt.time_key
-JOIN dim_symbol    ds ON f.symbol_key = ds.symbol_key
-GROUP BY dd.full_date, dt.hour, ds.asset_name
-ORDER BY dd.full_date, dt.hour;
+    h.hour,
+    h.asset_name,
+    h.avg_price,
+    h.high_price,
+    h.low_price,
+    h.total_trades_count AS trade_count
+FROM vw_fact_hourly_summary h
+JOIN vw_dim_date dd ON h.date_key = dd.date_key
+ORDER BY dd.full_date, h.hour;
 
 
--- CHART 2: Biểu đồ cột (Bar Chart) — Khối lượng theo phiên giao dịch (Asia/Europe/US)
+-- CHART 2: Biểu đồ cột (Bar Chart) — Top các đồng tiền biến động giá mạnh nhất theo ngày (Daily Volatility)
 SELECT
-    dt.trading_session,
-    ds.asset_name,
-    ROUND(SUM(f.volume), 4)      AS total_volume,
-    ROUND(SUM(f.trade_value), 2) AS total_usd_value,
-    COUNT(*)                     AS trade_count
-FROM vw_fact_crypto_trades f
-JOIN vw_dim_time   dt ON f.time_key   = dt.time_key
-JOIN dim_symbol    ds ON f.symbol_key = ds.symbol_key
-GROUP BY dt.trading_session, ds.asset_name
-ORDER BY total_usd_value DESC;
+    dd.full_date,
+    d.asset_name,
+    d.price_volatility_pct,
+    d.total_daily_volume,
+    d.total_daily_value_usd
+FROM vw_fact_daily_summary d
+JOIN vw_dim_date dd ON d.date_key = dd.date_key
+ORDER BY d.price_volatility_pct DESC;
 
 
 -- CHART 3: Biểu đồ tròn (Pie Chart) — Tỷ trọng giao dịch theo đồng tiền
@@ -253,12 +291,10 @@ SELECT
     de.exchange_name,
     f.price,
     f.volume,
-    f.trade_value          AS value_usd,
-    dt.trading_session
+    f.trade_value          AS value_usd
 FROM vw_fact_crypto_trades f
 JOIN dim_symbol    ds ON f.symbol_key   = ds.symbol_key
 JOIN dim_exchange  de ON f.exchange_key = de.exchange_key
-JOIN vw_dim_time   dt ON f.time_key     = dt.time_key
 ORDER BY f.trade_value DESC
 LIMIT 50;
 
