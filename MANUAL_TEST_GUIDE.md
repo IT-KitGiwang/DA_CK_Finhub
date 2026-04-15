@@ -84,3 +84,15 @@ ORDER BY f.trade_time DESC;
 ```
 6. Bấm nút **RUN**. 
 Kết quả sẽ là luồng dữ liệu thời gian thực được xử lý sạch sẽ, giá trị chính xác và các ID được tra cứu chéo theo bảng Dim chuẩn mực theo nghiệp vụ Data Engineering. Sẵn sàng tạo các biểu diễn Chart tự động làm mới!
+---
+All container: docker ps -a
+docker exec -it master bash
+Kiêm tra file panquet lưu trữ: hdfs dfs -ls /user/hive/warehouse (nằm ở host 9000)
+-> spark-sql -> SELECT * FROM crypto_trades LIMIT 10;
+check xem hive metastore có đang chạy chưa: 
+-> netstat -tulnp | grep 9083 (9083 dùng để spark, hive -> hive metastore (biết được metadata, dữ liệu dạng gì, lưu ở đâu))
+-> jps
+
+file .sql: 
+-> dùng để đăng kí bảng vào Hive metastore để spark/superset query được
+
