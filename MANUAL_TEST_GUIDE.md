@@ -96,3 +96,54 @@ check xem hive metastore có đang chạy chưa:
 file .sql: 
 -> dùng để đăng kí bảng vào Hive metastore để spark/superset query được
 
+KAFKA_CLUSTER_ID=NjY0MDlkYzgtYWM1MS00ZT
+--> số CMNN or id dịnh danh only of kafka trong docker 
+-> là hệ thống phân tán: 
+   + dữ lieu và cong việc dược chia cho nhiều máy (chạy trên nhiều server gọi là broker(tương ứng với một máy)
+   + broker: chịu trách nhiệm lưu trữ dữ lieu (các partition của topic) và sử lí yêu cầu từ producer (gửi dữ lieu) và consumer (doc dữ lieu) 	
+   + replication > 1 --> partition (bản sao > 1)  --> broker .
+--> quản lí metadata: dảm bao các dữ lieu (topic, partitions) lưu trong các folder của docker
+   + tính on dịnh: giúp hẹ thong khoi dọng nhanh và it loi hon , neu kh co thi moi lần chạy kafka tự sinh ra một id mới ngẫu nhiên, doi khi gây xung dọt khi dữ lieu cụ còn sót lại trong volume
+   + kết nối công cụ giám sát: sau này nếu muốn mở rộng công cụ UI trực quan dữ lieu vào thì dung nó de kết noi
+   + quản lí metadata: DỮ LIỆU ƯỢC LƯU TRÊN VOLUME CỦA DOCKER + HDFS CHO SPARK XỬ LÍ XONG VĂNG VÔ CHO SUPERSET VẼ HÌNH
+     - DE XEM DỮ LIEU BEN TRONG SỦ DỤNG LỆNH: 
+       + MỞ TRÌNH DUYET WEB: http://localhost:9870 -> Utilities -> Browse the file system. GÕ: /user/hive/warehouse/crypto_trades 
+       + XEM BANG TERMINAL: docker exec -it master bash , truy vấn trong mục hdfs
+         -> kết quả: year=2026 (kỹ thuật partitioning): file .parquet (dữ liệu thực tế) + _spark_metadata (metadata: cho biết mình đã cào đến đâu ròi, dữ liệu bị lỗi hay không) 
+        9092: số nội bộ (internal): cho các container bên trong docker nói chuyện với nhau (spark -> kafka trong docker, producer -> kafka trong docker, consumer -> kafka trong docker)
+        9094: số bên ngoài (external): cho phép các ứng dụng bên ngoài docker nói chuyện với kafka (producer -> kafka bên ngoài, consumer -> kafka bên ngoài, superset -> kafka bên ngoài)
+        
+1. 🌐 Danh sách Link Web UI (Mở bằng Chrome/Edge)
+Dịch vụ	Link (URL)	Công dụng
+Apache Superset	http://localhost:8089	Nơi vẽ Chart và Dashboard (admin/admin)
+HDFS Explorer	http://localhost:9870	Xem file .parquet lưu trong "ổ cứng" Hadoop
+Spark Master	http://localhost:8080	Xem cụm Spark có đang "khỏe" không
+YARN Manager	http://localhost:8088	Quản lý tài nguyên của toàn cụm Hadoop
+Spark App UI	http://localhost:4040	Xem chi tiết tiến trình Spark đang cào data (chỉ hiện khi đang chạy)
+2. 💻 Lệnh Terminal để kiểm tra "Sức khỏe" hệ thống
+Bạn mở Terminal/PowerShell trên Windows và gõ các lệnh sau để check xem "thủ môn" có đang gác đền không:
+
+A. Kiểm tra Container có đang chạy không? (Lệnh cơ bản nhất)
+powershell
+docker ps
+Kết quả mong đợi: Thấy đủ danh sách master, slave1, slave2, kafka, superset và ở cột STATUS ghi là Up ... seconds/minutes.
+B. Kiểm tra Cổng (Port) có đang MỞ hay không? (Dùng PowerShell)
+Nếu bạn nghi ngờ một dịch vụ bị treo, gõ lệnh này để test kết nối:
+
+powershell
+# Kiểm tra Kafka (đường ngoài)
+Test-NetConnection localhost -Port 9094
+# Kiểm tra Hive/Thrift (để Superset kết nối)
+Test-NetConnection localhost -Port 10000
+# Kiểm tra Superset
+Test-NetConnection localhost -Port 8089
+Kết quả mong đợi: Ở dòng cuối cùng hiện chữ TcpTestSucceeded : True. Nếu nó hiện False là dịch vụ đó đang "ngất", cần restart docker.
+C. Kiểm tra Log (Xem bên trong đang nói gì)
+Nếu dashboard không nhảy số, hãy xem Kafka/Spark đang la hét gì bằng lệnh:
+
+powershell
+# Xem log của Spark Master
+docker logs -f master
+# Xem log của Kafka
+docker logs -f kafka
+Chúc sếp quản lý "vương quốc" của mình thật mượt mà! Cần tôi giải thích thêm về cái cổng nào trong mớ này không?
