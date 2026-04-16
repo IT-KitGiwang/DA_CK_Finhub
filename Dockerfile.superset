@@ -1,0 +1,21 @@
+FROM apache/superset:latest
+
+USER root
+
+RUN apt-get update && apt-get install -y \
+    gcc g++ \
+    libsasl2-dev \
+    libsasl2-modules \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cài trực tiếp vào venv của superset bằng --target
+RUN pip install --no-cache-dir \
+    pyhive[hive] \
+    thrift \
+    thrift-sasl \
+    sasl \
+    pure-sasl \
+    impyla \
+    --target /app/.venv/lib/python3.10/site-packages
+USER superset

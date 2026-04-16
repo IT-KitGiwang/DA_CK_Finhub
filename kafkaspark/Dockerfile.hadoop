@@ -1,0 +1,14 @@
+# Bắt buộc phải là 3.5.0 vì Apache không có bản latest
+FROM apache/hadoop:3.5.0
+
+USER root
+
+# Tạo user dack15
+RUN useradd -m -s /bin/bash dack15
+RUN echo "dack15:123456" | chpasswd
+
+# Cấp quyền sudo
+RUN apt-get update && apt-get install -y sudo && \
+    echo "dack15 ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+RUN chown -R dack15:dack15 /opt/hadoop || true

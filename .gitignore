@@ -1,0 +1,41 @@
+# System files
+.DS_Store
+Thumbs.db
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.docker/
+
+# Data and Logs (in case of local bind mounts later)
+data/
+venv/
+logs/
+*.log
+tmp/
+temp/
+
+# Java/Spark/Hadoop temp files
+*.class
+*.jar
+!src/jars/*.jar
+*.pyc
+__pycache__/
+.spark-history/
+.spark-logs/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Dagster Tmp Files
+*.db
+*.out
+*.err
+*.complete
+.tmp_dagster*

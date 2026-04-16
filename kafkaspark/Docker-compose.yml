@@ -1,0 +1,111 @@
+networks:
+  data_network:
+    driver: bridge
+
+services:
+  # ================= HADOOP CLUSTER (3.5.0) =================
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile.hadoop
+    container_name: namenode
+    hostname: master
+    user: dack15
+    # GIẢI THÍCH: Thêm đoạn kiểm tra nếu chưa có data thì mới FORMAT, có rồi thì THÔI
+    command: >
+      bash -c "sudo chown -R dack15:dack15 /opt/hadoop &&
+      echo '<configuration><property><name>fs.defaultFS</name><value>hdfs://master:9000</value></property></configuration>' | sudo tee /opt/hadoop/etc/hadoop/core-site.xml > /dev/null &&
+      if [ ! -d '/opt/hadoop/data/dfs/name/current' ]; then
+        /opt/hadoop/bin/hdfs namenode -format dack15_cluster -force -nonInteractive;
+      fi;
+      /opt/hadoop/bin/hdfs namenode"
+    volumes:
+      - hadoop_master_data:/opt/hadoop/data # Lưu dữ liệu NameNode
+    networks:
+      - data_network
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+
+  slave1:
+    build:
+      context: .
+      dockerfile: Dockerfile.hadoop
+    container_name: datanode1
+    hostname: slave1
+    user: dack15
+    command: >
+      bash -c "sudo chown -R dack15:dack15 /opt/hadoop &&
+      echo '<configuration><property><name>fs.defaultFS</name><value>hdfs://master:9000</value></property></configuration>' | sudo tee /opt/hadoop/etc/hadoop/core-site.xml > /dev/null &&
+      /opt/hadoop/bin/hdfs datanode"
+    volumes:
+      - hadoop_slave1_data:/opt/hadoop/data # Lưu dữ liệu DataNode 1
+    networks:
+      - data_network
+
+  slave2:
+    build:
+      context: .
+      dockerfile: Dockerfile.hadoop
+    container_name: datanode2
+    hostname: slave2
+    user: dack15
+    command: >
+      bash -c "sudo chown -R dack15:dack15 /opt/hadoop &&
+      echo '<configuration><property><name>fs.defaultFS</name><value>hdfs://master:9000</value></property></configuration>' | sudo tee /opt/hadoop/etc/hadoop/core-site.xml > /dev/null &&
+      /opt/hadoop/bin/hdfs datanode"
+    volumes:
+      - hadoop_slave2_data:/opt/hadoop/data # Lưu dữ liệu DataNode 2
+    networks:
+      - data_network
+
+  # ================= KAFKA 4.0.2 =================
+  kafka:
+    image: apache/kafka:4.0.2
+    container_name: kafka
+    hostname: kafka
+    networks:
+      - data_network
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk" 
+    volumes:
+      - kafka_data:/var/lib/kafka/data # Giữ lại các Topic đã tạo
+
+  # ================= SPARK 4.0.2 =================
+  spark-master:
+    image: apache/spark:4.0.2
+    container_name: spark-master
+    hostname: spark-master
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master --port 7077 --webui-port 8080
+    ports:
+      - "8080:8080" 
+      - "7077:7077"
+    networks:
+      - data_network
+
+  spark-worker:
+    image: apache/spark:4.0.2
+    container_name: spark-worker
+    hostname: spark-worker
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077 --webui-port 8081
+    ports:
+      - "8081:8081"
+    networks:
+      - data_network
+
+# ĐÂY LÀ PHẦN QUAN TRỌNG NHẤT: KHAI BÁO CÁC Ổ ĐĨA "BẤT TỬ"
+volumes:
+  hadoop_master_data:
+  hadoop_slave1_data:
+  hadoop_slave2_data:
+  kafka_data:
