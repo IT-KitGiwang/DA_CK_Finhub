@@ -21,6 +21,7 @@ temp/
 # Java/Spark/Hadoop temp files
 *.class
 *.jar
+!src/jars/*.jar
 *.pyc
 __pycache__/
 .spark-history/
@@ -30,3 +31,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Dagster Tmp Files
+*.db
+*.out
+*.err
+*.complete
+.tmp_dagster*

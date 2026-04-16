@@ -112,20 +112,29 @@ KAFKA_CLUSTER_ID=NjY0MDlkYzgtYWM1MS00ZT
          -> kết quả: year=2026 (kỹ thuật partitioning): file .parquet (dữ liệu thực tế) + _spark_metadata (metadata: cho biết mình đã cào đến đâu ròi, dữ liệu bị lỗi hay không) 
         9092: số nội bộ (internal): cho các container bên trong docker nói chuyện với nhau (spark -> kafka trong docker, producer -> kafka trong docker, consumer -> kafka trong docker)
         9094: số bên ngoài (external): cho phép các ứng dụng bên ngoài docker nói chuyện với kafka (producer -> kafka bên ngoài, consumer -> kafka bên ngoài, superset -> kafka bên ngoài)
-        
+
 1. 🌐 Danh sách Link Web UI (Mở bằng Chrome/Edge)
 Dịch vụ	Link (URL)	Công dụng
 Apache Superset	http://localhost:8089	Nơi vẽ Chart và Dashboard (admin/admin)
 HDFS Explorer	http://localhost:9870	Xem file .parquet lưu trong "ổ cứng" Hadoop
 Spark Master	http://localhost:8080	Xem cụm Spark có đang "khỏe" không
 YARN Manager	http://localhost:8088	Quản lý tài nguyên của toàn cụm Hadoop
-Spark App UI	http://localhost:4040	Xem chi tiết tiến trình Spark đang cào data (chỉ hiện khi đang chạy)
+Spark App UI	http://localhost:4040	Xem chi tiết tiến trình Spark đang cào data (chỉ hiện khi đang chạy) 
+
+- lịch sử
++ xem lịch sử cào dữ liệu luôn
++ xem trong 9870
+
 2. 💻 Lệnh Terminal để kiểm tra "Sức khỏe" hệ thống
 Bạn mở Terminal/PowerShell trên Windows và gõ các lệnh sau để check xem "thủ môn" có đang gác đền không:
 
 A. Kiểm tra Container có đang chạy không? (Lệnh cơ bản nhất)
 powershell
 docker ps
+
+KHI CHẠY LỆNH: docker-compose up -d 
+- Window sẽ lôi tất cả các cổng ra mà chạy, ngoại trừ cổng 10000 (cổng kết nối với superset), để nó mở thì nó phải đảm bảo hdfs (9000) và metadata (9083) phải sẵn sàng 100% ròi, nếu mở quá nhanh nó sẽ kh tìm thấy mấy cổng kia thì nó crash luôn
+
 Kết quả mong đợi: Thấy đủ danh sách master, slave1, slave2, kafka, superset và ở cột STATUS ghi là Up ... seconds/minutes.
 B. Kiểm tra Cổng (Port) có đang MỞ hay không? (Dùng PowerShell)
 Nếu bạn nghi ngờ một dịch vụ bị treo, gõ lệnh này để test kết nối:
@@ -137,13 +146,19 @@ Test-NetConnection localhost -Port 9094
 Test-NetConnection localhost -Port 10000
 # Kiểm tra Superset
 Test-NetConnection localhost -Port 8089
+# Kiểm tra HDFS
+Test-NetConnection localhost -Port 9870
+# Kiểm tra Spark
+Test-NetConnection localhost -Port 8080
+# Kiểm tra cổng 10000 (cổng bảo vệ canh cửa chứ không phải cổng kết nối đến superset).
+Test-NetConnection localhost -Port 10000
+
 Kết quả mong đợi: Ở dòng cuối cùng hiện chữ TcpTestSucceeded : True. Nếu nó hiện False là dịch vụ đó đang "ngất", cần restart docker.
 C. Kiểm tra Log (Xem bên trong đang nói gì)
 Nếu dashboard không nhảy số, hãy xem Kafka/Spark đang la hét gì bằng lệnh:
 
-powershell
-# Xem log của Spark Master
-docker logs -f master
-# Xem log của Kafka
-docker logs -f kafka
-Chúc sếp quản lý "vương quốc" của mình thật mượt mà! Cần tôi giải thích thêm về cái cổng nào trong mớ này không?
+# Lệnh chạy Dagster
+python -m dagster dev -f src/dagster/dagster_pipeline.py
+taskkill /F /IM python.exe
+
+# lí do sử dụng lệnh: docker exec master bash -c "/opt/spark/sbin/stop-thriftserver.sh || true để xóa trước khi khởi động lại thrift server
