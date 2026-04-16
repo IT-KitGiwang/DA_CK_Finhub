@@ -1,3 +1,5 @@
 google-cloud-pubsub
 google-cloud-bigquery
 google-cloud-aiplatform
+protobuf<5.0.0,>=3.20.3
+packaging<26.0,>=20.0

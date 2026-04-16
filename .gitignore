@@ -13,6 +13,7 @@ Thumbs.db
 
 # Data and Logs (in case of local bind mounts later)
 data/
+venv/
 logs/
 *.log
 tmp/
