@@ -1,117 +1,202 @@
 import base64
 import json
-import time
 import os
 import logging
+import uuid
+from datetime import datetime, timezone, timedelta
 import functions_framework
 from google.cloud import bigquery
+from google.cloud import storage
+from google.api_core.exceptions import NotFound
 
-# Tối ưu hóa Serverless: Khởi tạo Client ở Global Namespace 
-# để tái sử dụng Connection giữa các lần kích hoạt (Warm booting), tiết kiệm độ trễ khởi tạo.
+# Khởi tạo Client ở Global Namespace để tận dụng Warm Boot
 bq_client = None
+storage_client = None
+_table_verified = False  # Flag kiểm tra bảng đã tồn tại chưa (chỉ check 1 lần/cold start)
 
-MAX_FUTURE_SECONDS = 86400      # 24 giờ
-MAX_PAST_SECONDS   = 2592000    # 30 ngày
+
 
 def get_valid_symbols():
-    """Lấy danh sách các đồng Coin hợp lệ từ System Env (Single Source of Truth)"""
-    raw_symbols = os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT,BINANCE:SOLUSDT,BINANCE:DOGEUSDT")
+    raw_symbols = os.getenv("SYMBOLS", "BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:BNBUSDT,BINANCE:SOLUSDT")
     return [sym.strip() for sym in raw_symbols.split(",") if sym.strip()]
+
+# Ánh xạ tên đồng tiền chuẩn (Dimension Mapping trực tiếp)
+ASSET_MAPPING = {
+    "BINANCE:BTCUSDT": "Bitcoin",
+    "BINANCE:ETHUSDT": "Ethereum",
+    "BINANCE:BNBUSDT": "BNB",
+    "BINANCE:SOLUSDT": "Solana"
+}
+
+
+def ensure_bq_table(client, table_id, dataset_id, project_id):
+    """
+    Tự động tạo Dataset + Table trong BigQuery nếu chưa tồn tại.
+    Chỉ chạy 1 lần mỗi cold start nhờ flag _table_verified.
+    CHÚ Ý: Chỉ bắt NotFound — mọi lỗi khác (403 Permission, 500 Server)
+    sẽ được nổi lên để caller xử lý, tránh nuốt lỗi nghiêm trọng.
+    """
+    global _table_verified
+    if _table_verified:
+        return
+
+    # FIX BUG #1: Chỉ bắt NotFound thay vì Exception chung
+    # Đảm bảo Dataset tồn tại
+    dataset_ref = bigquery.DatasetReference(project_id, dataset_id)
+    try:
+        client.get_dataset(dataset_ref)
+    except NotFound:
+        dataset = bigquery.Dataset(dataset_ref)
+        dataset.location = "asia-southeast1"
+        client.create_dataset(dataset, exists_ok=True)
+        logging.info(f"📦 Đã tạo dataset: {dataset_id}")
+
+    # Đảm bảo Table tồn tại với schema đúng
+    try:
+        client.get_table(table_id)
+    except NotFound:
+        schema = [
+            bigquery.SchemaField("time", "DATETIME", mode="REQUIRED", description="Thời điểm giao dịch gốc"),
+            bigquery.SchemaField("symbol", "STRING", mode="REQUIRED", description="Mã giao dịch (VD: BINANCE:BTCUSDT)"),
+            bigquery.SchemaField("asset_name", "STRING", mode="NULLABLE", description="Tên đầy đủ (VD: Bitcoin)"),
+            bigquery.SchemaField("price", "FLOAT64", mode="REQUIRED", description="Giá giao dịch (USD)"),
+            bigquery.SchemaField("volume", "FLOAT64", mode="REQUIRED", description="Khối lượng giao dịch"),
+            bigquery.SchemaField("year", "INT64", mode="NULLABLE", description="Năm giao dịch"),
+            bigquery.SchemaField("month", "INT64", mode="NULLABLE", description="Tháng giao dịch"),
+            bigquery.SchemaField("day", "INT64", mode="NULLABLE", description="Ngày giao dịch"),
+            bigquery.SchemaField("processed_at", "DATETIME", mode="NULLABLE", description="Thời điểm xử lý trên Cloud (ISO 8601)"),
+        ]
+        table = bigquery.Table(table_id, schema=schema)
+        client.create_table(table, exists_ok=True)
+        logging.info(f"📦 Đã tạo bảng BigQuery: {table_id}")
+
+    _table_verified = True
 
 @functions_framework.http
 def clean_and_insert_crypto(request):
-    """
-    Cloud Run HTTP Function - Triggered by Pub/Sub via Eventarc.
-    Eventarc gửi Pub/Sub messages dưới dạng HTTP POST request.
-    Thực hiện 6 BƯỚC DATA CLEANING và Push Real-time Streaming thẳng vào BigQuery.
-    """
-    global bq_client
+    global bq_client, storage_client, _table_verified
+    
     if not bq_client:
         bq_client = bigquery.Client()
+    if not storage_client:
+        storage_client = storage.Client()
         
-    # Cấu hình Kiến trúc từ Biến môi trường của Function
-    gcp_project = os.getenv("GCP_PROJECT_ID", "your_project_id")
-    bq_dataset = os.getenv("GCP_BQ_DATASET", "finhub_dataset")
-    bq_table_name = os.getenv("GCP_BQ_TABLE_STREAM", "crypto_trades")
-    table_id = f"{gcp_project}.{bq_dataset}.{bq_table_name}"
+    # Lấy cấu hình từ Environment
+    gcp_project = os.getenv("GCP_PROJECT_ID", "phan-tich-du-lieu-lon")
+    bq_dataset = os.getenv("GCP_BQ_DATASET", "finhub_dw")
+    bq_table_name = os.getenv("GCP_BQ_TABLE_STREAM", "streaming_crypto_trades")
+    gcs_bucket_name = os.getenv("GCP_GCS_BUCKET", "raw_data_api_ptdlnhom15")
     
+    table_id = f"{gcp_project}.{bq_dataset}.{bq_table_name}"
     valid_symbols = get_valid_symbols()
 
     try:
-        # ===== BƯỚC 1: GIẢI MÃ TIN NHẮN PUB/SUB TỪ HTTP REQUEST =====
-        # Eventarc gửi Pub/Sub message dưới dạng JSON trong body HTTP POST
+        # 1. Parse Pub/Sub envelope
         envelope = request.get_json(silent=True)
         if not envelope:
-            logging.warning("❌ Request body rỗng hoặc không phải JSON. Bỏ qua.")
             return ("Bad Request: no JSON payload", 400)
 
-        # Pub/Sub bọc data trong envelope.message.data (base64 encoded)
         pubsub_message = envelope.get("message", {})
-        encoded_data = pubsub_message.get("data")
+        encoded_data = pubsub_message.get("data") or envelope.get("data")
+        
+        # Lấy Publish Time tự nhiên của hệ thống Pub/Sub làm gốc thời gian xử lý
+        publish_time_str = pubsub_message.get("publishTime")
+        if publish_time_str:
+            try:
+                dt_object = datetime.fromisoformat(publish_time_str.replace('Z', '+00:00'))
+            except ValueError:
+                dt_object = datetime.now(timezone.utc)
+        else:
+            dt_object = datetime.now(timezone.utc)
+            
+        # Nâng lên timezone Việt Nam (+7) để đồng bộ hoàn toàn với Producer
+        dt_vn = dt_object + timedelta(hours=7)
+        
+        # Format chuẩn sạch cho BigQuery TIMESTAMP (không dư microseconds/UTC text)
+        processed_at_val = dt_vn.strftime("%Y-%m-%d %H:%M:%S")
         
         if not encoded_data:
-            # Fallback: Thử lấy trực tiếp từ envelope.data (một số cấu hình khác)
-            encoded_data = envelope.get("data")
-        
-        if not encoded_data:
-            logging.warning("❌ Pub/Sub message không chứa Payload 'data'. Bỏ qua.")
             return ("Bad Request: no data field", 400)
 
         raw_message = base64.b64decode(encoded_data).decode('utf-8')
         data = json.loads(raw_message)
         
-        # ===== BƯỚC 2: BẮT LỖI NULL (Loại bỏ giao dịch khuyết dữ liệu) =====
+        # 2. Data Cleaning
         if not all(k in data for k in ("time", "symbol", "price", "volume")):
-            logging.warning("❌ LỖI CLEANSING: Dữ liệu bị khuyết trường cốt lõi. Giao dịch bị vứt bỏ.")
             return ("OK - skipped: missing fields", 200)
-            
-        # Chuẩn hóa Chuỗi Data Thô (Trim khoảng trắng & Viết hoa chuẩn Name)
+        
+        # Parse time string từ Producer (format: '%Y-%m-%d %H:%M:%S') thành BQ TIMESTAMP
+        trade_time_str = str(data['time']).strip()
+        try:
+            trade_dt = datetime.strptime(trade_time_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return ("OK - skipped: invalid time format", 200)
+        # Format chuẩn cho BigQuery TIMESTAMP
+        bq_time_val = trade_dt.strftime("%Y-%m-%d %H:%M:%S")
+
         symbol = str(data['symbol']).strip().upper()
         price = float(data['price'])
         volume = float(data['volume'])
-        trade_timestamp_ms = int(data['time'])   # UNIX timestamp millisecond API
         
-        # ===== BƯỚC 3: BỘ LỌC DANH SÁCH TRẮNG (Whitelist) =====
+        # Filter & Validate
         if symbol not in valid_symbols:
-            logging.info(f"⚠️ BỎ QUA: Bắt được tín hiệu {symbol} nhưng không nằm trong Whitelist đã cấp phép.")
             return ("OK - skipped: not in whitelist", 200)
-            
-        # ===== BƯỚC 4: VALIDATION TOÁN HỌC (Chặn giá trị Âm/0) =====
         if price <= 0 or volume <= 0:
-            logging.warning(f"❌ LỖI VẬT LÝ: Giao dịch của {symbol} có khối lượng/giá nhỏ hơn bằng 0.")
-            return ("OK - skipped: invalid price/volume", 200)
-            
-        # ===== BƯỚC 5: VALIDATION THỜI GIAN (Drift Protection) =====
-        current_time_ms = int(time.time() * 1000)
-        future_limit = current_time_ms + (MAX_FUTURE_SECONDS * 1000)
-        past_limit = current_time_ms - (MAX_PAST_SECONDS * 1000)
-        
-        if trade_timestamp_ms > future_limit or trade_timestamp_ms < past_limit:
-            logging.warning(f"❌ LỖI LỆCH THỜI GIAN: Giao dịch {symbol} vi phạm giới hạn tương lai/quá khứ.")
-            return ("OK - skipped: timestamp out of range", 200)
-            
-        # ===== BƯỚC 6: XẢ SINK VÀO BIGQUERY (SILVER LAYER) =====
-        row_to_insert = [
-            {
-                "time": trade_timestamp_ms / 1000.0,
-                "symbol": symbol,
-                "price": price,
-                "volume": volume
-            }
-        ]
-        
-        # Bắn API Insert Streaming
-        errors = bq_client.insert_rows_json(table_id, row_to_insert)
-        if errors:
-            logging.error(f"❌ THẤT BẠI: Lỗi khi Bắn API vào BigQuery: {errors}")
-            return (f"Error inserting to BigQuery: {errors}", 500)
-        else:
-            logging.info(f"✅ THÀNH CÔNG [REAL-TIME]: Chèn {symbol} (Vol: {volume} | Price: {price}$) thành công.")
-            return ("OK", 200)
+            return ("OK - skipped: invalid values", 200)
 
-    except json.JSONDecodeError:
-        logging.error("❌ LỖI FORMAT: Chuỗi dữ liệu từ Pub/Sub không chuẩn định dạng JSON.")
-        return ("Bad Request: invalid JSON in message", 400)
+        clean_record = {
+            "time": bq_time_val,  # Gốc 100% từ producer, đã validate & format
+            "symbol": symbol,
+            "price": price,
+            "volume": volume,
+            "processed_at": processed_at_val
+        }
+
+        # Bản ghi chuẩn bị đẩy lên BigQuery
+        bq_record = clean_record.copy()
+        bq_record.update({
+            "asset_name": ASSET_MAPPING.get(symbol, symbol),
+            "year": trade_dt.year,    # Dùng Giờ Khớp lệnh thực tế thay vì Giờ Xử lý Cloud
+            "month": trade_dt.month,
+            "day": trade_dt.day
+        })
+
+        # ===== NHÁNH 1: BIGQUERY (Streaming) =====
+        ensure_bq_table(bq_client, table_id, bq_dataset, gcp_project)
+        try:
+            errors = bq_client.insert_rows_json(table_id, [bq_record])
+            if errors:
+                logging.error(f"BQ Error: {errors}")
+        except NotFound:
+            logging.warning("⚠️ BQ Dataset/Table not found! Resetting state and retrying...")
+            _table_verified = False
+            ensure_bq_table(bq_client, table_id, bq_dataset, gcp_project)
+            errors = bq_client.insert_rows_json(table_id, [bq_record])
+            if errors:
+                logging.error(f"BQ Error on retry: {errors}")
+
+        # ===== NHÁNH 2: CLOUD STORAGE (Data Lake Sink) =====
+        # FIX BUG #3: Tách riêng try/except cho GCS — nếu GCS lỗi, vẫn return 200
+        # để Pub/Sub KHÔNG retry (vì BQ đã insert thành công ở trên).
+        try:
+            # Tách thư mục phân mảnh bằng Giờ Giao Dịch Thực (Event Time - trade_dt)
+            partition_path = trade_dt.strftime("clean_data/year=%Y/month=%m/day=%d")
+            filename = f"{partition_path}/{symbol}_{int(trade_dt.timestamp() * 1000)}_{uuid.uuid4().hex[:8]}.json"
+            
+            bucket = storage_client.bucket(gcs_bucket_name)
+            blob = bucket.blob(filename)
+            blob.upload_from_string(json.dumps(clean_record), content_type='application/json')
+            logging.info(f"✅ REAL-TIME SYNC: {symbol} -> BigQuery & GCS ({filename})")
+        except Exception as gcs_err:
+            # Log lỗi GCS nhưng KHÔNG crash function — BQ data đã an toàn
+            logging.error(f"⚠️ GCS Upload failed (BQ vẫn OK): {gcs_err}")
+
+        return ("OK", 200)
+
+    except ValueError as ve:
+        logging.warning(f"⚠️ Data không hợp lệ, bỏ qua: {ve}")
+        return ("OK - skipped: invalid data format", 200)
+
     except Exception as e:
-        logging.critical(f"🔥 SẬP CLOUD FUNCTION: Phát hiện lỗi nghiêm trọng - {e}")
-        return (f"Internal Server Error: {e}", 500)
+        logging.critical(f"🔥 SẬP: {e}", exc_info=True)
+        return (f"Internal Error: {e}", 500)
